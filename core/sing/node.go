@@ -50,7 +50,9 @@ type HttpupgradeNetworkConfig struct {
 	Host string `json:"host"`
 }
 
-func getInboundOptions(tag string, info *panel.NodeInfo, c *conf.Options) (option.Inbound, error) {
+// getInboundOptions 构建入站配置。
+// innerPort > 0 表示该节点外层由 shadow-tls 代理，SS 入站改为监听 127.0.0.1:innerPort。
+func getInboundOptions(tag string, info *panel.NodeInfo, c *conf.Options, innerPort int) (option.Inbound, error) {
 	addr, err := netip.ParseAddr(c.ListenIP)
 	if err != nil {
 		return option.Inbound{}, fmt.Errorf("the listen ip not vail")
@@ -230,6 +232,12 @@ func getInboundOptions(tag string, info *panel.NodeInfo, c *conf.Options) (optio
 	case "shadowsocks":
 		in.Type = "shadowsocks"
 		n := info.Shadowsocks
+		// 外层 shadow-tls 时，内层 SS 只监听回环，公网端口交给外层
+		if innerPort > 0 {
+			inner := netip.MustParseAddr("127.0.0.1")
+			listen.Listen = (*badoption.Addr)(&inner)
+			listen.ListenPort = uint16(innerPort)
+		}
 		var keyLength int
 		switch n.Cipher {
 		case "2022-blake3-aes-128-gcm":
@@ -396,7 +404,13 @@ func getInboundOptions(tag string, info *panel.NodeInfo, c *conf.Options) (optio
 
 func (b *Sing) AddNode(tag string, info *panel.NodeInfo, config *conf.Options) error {
 	b.nodeReportMinTrafficBytes[tag] = config.ReportMinTraffic * 1024
-	c, err := getInboundOptions(tag, info, config)
+
+	stlsCfg, innerPort, err := parseShadowTLSNode(info, config)
+	if err != nil {
+		return err
+	}
+
+	c, err := getInboundOptions(tag, info, config, innerPort)
 	if err != nil {
 		return err
 	}
@@ -413,10 +427,24 @@ func (b *Sing) AddNode(tag string, info *panel.NodeInfo, config *conf.Options) e
 	if err != nil {
 		return fmt.Errorf("add inbound error: %s", err)
 	}
+
+	// 内层起来后再挂外层，失败则回滚内层
+	if stlsCfg != nil {
+		if err = b.addShadowTLS(tag, stlsCfg); err != nil {
+			_ = in.Remove(tag)
+			return err
+		}
+		b.logFactory.NewLogger("").Info(
+			"shadow-tls 已启用: ", stlsCfg.listenIP, ":", stlsCfg.listenPort,
+			" -> 127.0.0.1:", innerPort, " (sni=", stlsCfg.host, ")",
+		)
+	}
 	return nil
 }
 
 func (b *Sing) DelNode(tag string) error {
+	// 先摘外层，避免继续把流量打进即将关闭的内层
+	b.removeShadowTLS(tag)
 	in := b.box.Inbound()
 	err := in.Remove(tag)
 	if err != nil {

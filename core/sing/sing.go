@@ -32,6 +32,10 @@ type Sing struct {
 	logFactory                log.Factory
 	users                     *UserMap
 	nodeReportMinTrafficBytes map[string]int64
+
+	// stlsOuter 记录节点 tag -> shadow-tls 外层 tag，便于热更新和删除时一并清理
+	stlsMu    sync.Mutex
+	stlsOuter map[string]string
 }
 
 type UserMap struct {
@@ -93,6 +97,7 @@ func New(c *conf.CoreConfig) (vCore.Core, error) {
 			uidMap: make(map[string]int),
 		},
 		nodeReportMinTrafficBytes: make(map[string]int64),
+		stlsOuter:                 make(map[string]string),
 	}, nil
 }
 
