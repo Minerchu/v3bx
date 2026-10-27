@@ -53,7 +53,13 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 TMP_BIN="${TMP_DIR}/V2bX"
 
 info "下载 V2bX (${ARCH})..."
-if ! curl -fL --progress-bar --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 -o "$TMP_BIN" "$DL_URL"; then
+CURL_OPTS="-fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300"
+if [ -t 2 ]; then
+    CURL_OPTS="$CURL_OPTS --progress-bar"
+else
+    CURL_OPTS="$CURL_OPTS -sS"
+fi
+if ! curl $CURL_OPTS -o "$TMP_BIN" "$DL_URL"; then
     die "下载失败：$DL_URL
 可尝试手动下载后放到 ${BIN_DIR}/V2bX"
 fi
