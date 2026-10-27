@@ -16,6 +16,26 @@ A V2board node server based on multi core, modified from XrayR.
 
 **注意： 本项目需要搭配[修改版V2board](https://github.com/wyx2685/v2board)**
 
+## 快速安装
+
+一条命令，自动识别架构、下载对应二进制、校验、装服务：
+
+```bash
+bash <(curl -sL https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh)
+```
+
+- **新机器**：提示填写面板地址、通讯密钥、节点 ID，自动生成配置并启动
+- **已装过**：自动备份旧版本、替换二进制、重启服务，配置文件不动
+
+非交互部署（脚本化 / 批量装机）：
+
+```bash
+APIHOST=https://panel.example.com APIKEY=xxxx NODEID=112 \
+  bash <(curl -sL https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh)
+```
+
+装完在面板里把该节点建成 `shadowsocks`，插件选 `shadow-tls`，参数填 `host=www.php.net;password=你的密码;version=3`。保存后 V2bX 会在 60 秒内自动生成 shadowtls 外层，**不用重启，也没有额外配置项**。
+
 ## 特点
 
 * 永久开源且免费。

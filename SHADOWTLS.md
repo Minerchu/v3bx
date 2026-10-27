@@ -40,6 +40,27 @@
 
 ## 安装
 
+### 一键安装（推荐）
+
+```bash
+bash <(curl -sL https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh)
+```
+
+脚本会自动：识别 CPU 架构 → 从 Releases 下载对应二进制 → SHA256 校验 → 备份旧版本 → 安装 → 重启服务。
+
+首次安装会提示填三项（面板地址、节点通讯密钥、节点 ID），生成 `/etc/V2bX/config.json` 和 systemd 服务；已安装过的机器只替换二进制，配置完全不动。
+
+批量部署可以走环境变量，不产生交互：
+
+```bash
+APIHOST=https://panel.example.com APIKEY=xxxx NODEID=112 NODETYPE=shadowsocks \
+  bash <(curl -sL https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh)
+```
+
+指定版本：`VERSION=v1.0.0 bash <(curl -sL ...)`
+
+### 手动安装
+
 与原版完全相同的步骤，**配置文件一个字都不用改**：
 
 ```bash
