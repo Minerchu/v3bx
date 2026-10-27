@@ -40,40 +40,35 @@
 
 ## 安装
 
-### 一键安装（推荐）
+### 一键安装
+
+和官方 V2bX 一模一样的命令，只是仓库换成这个：
 
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh)
+wget -N https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh && bash install.sh
 ```
 
-脚本会自动：识别 CPU 架构 → 从 Releases 下载对应二进制 → SHA256 校验 → 备份旧版本 → 安装 → 重启服务。
+脚本流程、管理命令、菜单编号全部与官方一致（`V2bX`、`V2bX start`、`V2bX update`、`V2bX log`……），额外多做了三件事：
 
-首次安装会提示填三项（面板地址、节点通讯密钥、节点 ID），生成 `/etc/V2bX/config.json` 和 systemd 服务；已安装过的机器只替换二进制，配置完全不动。
+- 安装包带 SHA256 校验，不匹配直接中止
+- 旧二进制备份到 `/usr/local/V2bX-backup/`，保留最近 3 份
+- 配置向导修正了 sing-box 1.13 的 DNS 写法，没有 IPv6 出口时自动阻断 IPv6 字面量直连
 
-批量部署可以走环境变量，不产生交互：
-
-```bash
-APIHOST=https://panel.example.com APIKEY=xxxx NODEID=112 NODETYPE=shadowsocks \
-  bash <(curl -sL https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh)
-```
-
-指定版本：`VERSION=v1.0.0 bash <(curl -sL ...)`
+首次安装会问要不要生成配置文件，选 `y` 走向导填面板地址、API Key、节点 ID 即可；已经装过官方版的机器直接跑同一条命令，配置完全不动。
 
 ### 手动安装
 
-与原版完全相同的步骤，**配置文件一个字都不用改**：
+同官方步骤，只换二进制：
 
 ```bash
 systemctl stop V2bX
-cp /usr/local/V2bX/V2bX /root/V2bX.bak.$(date +%s)      # 备份
-cp V2bX-linux-amd64 /usr/local/V2bX/V2bX                # arm 机器用 V2bX-linux-arm64
-chmod +x /usr/local/V2bX/V2bX
+cp /usr/local/V2bX/V2bX /root/V2bX.bak.$(date +%s)
+cd /tmp && unzip V2bX-linux-64.zip -d v2bx      # arm 机器用 V2bX-linux-arm64-v8a.zip
+cp v2bx/V2bX /usr/local/V2bX/V2bX && chmod +x /usr/local/V2bX/V2bX
 systemctl start V2bX
 ```
 
 二进制为静态编译（`CGO_ENABLED=0`），不依赖目标机 glibc 版本。
-
-已经用官方脚本装好 V2bX 的机器，直接替换二进制即可，`/etc/V2bX/config.json` 保持原样。
 
 ---
 

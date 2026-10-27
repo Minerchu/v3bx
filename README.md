@@ -30,6 +30,12 @@ wget -N https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh && bash 
 
 装完第一次会问你要不要生成配置文件，选 `y` 走向导填面板地址、API Key、节点 ID 即可。
 
+升级时旧二进制会备份到 `/usr/local/V2bX-backup/`（保留最近 3 份），出问题可以直接换回去：
+
+```bash
+cp /usr/local/V2bX-backup/V2bX.<时间戳> /usr/local/V2bX/V2bX && systemctl restart V2bX
+```
+
 ### 管理命令
 
 和官方完全一致（大小写不敏感）：
