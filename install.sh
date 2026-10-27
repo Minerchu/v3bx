@@ -139,12 +139,14 @@ check_status() {
 }
 
 install_V2bX() {
-    # 备份旧二进制，出问题可回滚
+    # 备份旧二进制，出问题可回滚（放在独立目录，避免随安装目录一起被清掉）
     if [[ -f /usr/local/V2bX/V2bX ]]; then
-        local bak="/usr/local/V2bX/V2bX.bak.$(date +%Y%m%d%H%M%S)"
+        local bakdir="/usr/local/V2bX-backup"
+        mkdir -p "$bakdir"
+        local bak="${bakdir}/V2bX.$(date +%Y%m%d%H%M%S)"
         cp /usr/local/V2bX/V2bX "$bak" 2>/dev/null && echo -e "${green}已备份旧版本：${bak}${plain}"
         # 只保留最近 3 个备份
-        ls -1t /usr/local/V2bX/V2bX.bak.* 2>/dev/null | tail -n +4 | xargs -r rm -f
+        ls -1t ${bakdir}/V2bX.* 2>/dev/null | tail -n +4 | xargs -r rm -f
     fi
 
     if [[ -e /usr/local/V2bX/ ]]; then
