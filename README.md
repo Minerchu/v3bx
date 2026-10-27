@@ -1,12 +1,12 @@
 # V2bX
 
-> **本分支（Minerchu/V2bX）在上游基础上增加了 Shadowsocks 的 shadow-tls v3 插件支持。**
+> **本项目基于 [wyx2685/V2bX](https://github.com/wyx2685/V2bX)，增加了 Shadowsocks 的 shadow-tls v3 插件支持。**
 >
 > 面板里插件选 `shadow-tls`、参数填 `host=...;password=...;version=3` 即可生效，V2bX 会自动生成 shadowtls 外层 + shadowsocks 内层两个嵌套入站，用户管理、流量统计、心跳全部照旧。
 >
 > 安装方式与上游完全一致：替换二进制、配置文件不动。详见 **[SHADOWTLS.md](./SHADOWTLS.md)**。
 >
-> 预编译二进制见 [Releases](https://github.com/Minerchu/V2bX/releases)。
+> 预编译二进制见 [Releases](https://github.com/Minerchu/v3bx/releases)。
 
 [![](https://img.shields.io/badge/TgChat-UnOfficialV2Board%E4%BA%A4%E6%B5%81%E7%BE%A4-green)](https://t.me/unofficialV2board)
 [![](https://img.shields.io/badge/TgChat-YuzukiProjects%E4%BA%A4%E6%B5%81%E7%BE%A4-blue)](https://t.me/YuzukiProjects)

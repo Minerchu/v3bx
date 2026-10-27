@@ -1,8 +1,8 @@
 # shadow-tls v3 支持说明
 
-这是 [`wyx2685/V2bX`](https://github.com/wyx2685/V2bX) 的个人分支，唯一目的是**让 V2bX 原生支持 Shadowsocks 的 shadow-tls v3 插件**。
+本项目基于 [`wyx2685/V2bX`](https://github.com/wyx2685/V2bX)，唯一改动是**让 V2bX 原生支持 Shadowsocks 的 shadow-tls v3 插件**。代码保留完整上游历史，可随时合并上游更新。
 
-上游 V2bX 会把面板下发的 `plugin` / `plugin_opts` 丢弃，只能跑裸 SS。本分支补上了这条链路，**安装方式、配置格式、面板用法与上游完全一致**，只是替换二进制。
+上游 V2bX 会把面板下发的 `plugin` / `plugin_opts` 丢弃，只能跑裸 SS。本项目补上了这条链路，**安装方式、配置格式、面板用法与上游完全一致**，只是替换二进制。
 
 ---
 
@@ -123,7 +123,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 
 ## 与上游同步
 
-本分支基于上游 `dev_new` 分支。上游更新后：
+本项目基于上游 `dev_new` 分支（`71277de`）。上游更新后：
 
 ```bash
 git remote add upstream https://github.com/wyx2685/V2bX.git
