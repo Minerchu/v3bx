@@ -15,7 +15,7 @@ add_node_config() {
     echo -e "${green}1. xray${plain}"
     echo -e "${green}2. singbox${plain}"
     echo -e "${green}3. hysteria2${plain}"
-    read -rp "请输入：" core_type
+    read -rp "请输入：" core_type || exit 1
     if [ "$core_type" == "1" ]; then
         core="xray"
         core_xray=true
@@ -30,7 +30,7 @@ add_node_config() {
         continue
     fi
     while true; do
-        read -rp "请输入节点Node ID：" NodeID
+        read -rp "请输入节点Node ID：" NodeID || exit 1
         # 判断NodeID是否为正整数
         if [[ "$NodeID" =~ ^[0-9]+$ ]]; then
             break  # 输入正确，退出循环
@@ -215,7 +215,7 @@ generate_config_file() {
     echo -e "${red}3. 原来的配置文件会保存到 /etc/V2bX/config.json.bak${plain}"
     echo -e "${red}4. 目前仅部分支持TLS${plain}"
     echo -e "${red}5. 使用此功能生成的配置文件会自带审计，确定继续？(y/n)${plain}"
-    read -rp "请输入：" continue_prompt
+    read -rp "请输入：" continue_prompt || exit 1
     if [[ "$continue_prompt" =~ ^[Nn][Oo]? ]]; then
         exit 0
     fi
@@ -240,7 +240,7 @@ generate_config_file() {
             first_node=false
             add_node_config
         else
-            read -rp "是否继续添加节点配置？(回车继续，输入n或no退出)" continue_adding_node
+            read -rp "是否继续添加节点配置？(回车继续，输入n或no退出)" continue_adding_node || break
             if [[ "$continue_adding_node" =~ ^[Nn][Oo]? ]]; then
                 break
             elif [ "$fixed_api_info" = false ]; then
