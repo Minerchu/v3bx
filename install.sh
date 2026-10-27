@@ -1,295 +1,328 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #
-# v3bx 一键安装 / 升级脚本
-#   项目：https://github.com/Minerchu/v3bx
+# v3bx 一键安装脚本
+#   仓库：https://github.com/Minerchu/v3bx
+#
+# 与 V2bX 官方安装脚本用法、流程、命令完全一致，仅二进制来源不同：
+#   官方：https://github.com/wyx2685/V2bX
+#   本版：https://github.com/Minerchu/v3bx （原生支持 shadowsocks + shadow-tls v3）
 #
 # 用法：
-#   全新安装：bash <(curl -sL https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh)
-#   仅升级：  bash <(curl -sL https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh)
-#   指定版本：VERSION=v1.0.0 bash <(curl -sL ...)
+#   wget -N https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh && bash install.sh
+#   bash install.sh v1.1.0        # 安装指定版本
 #
-# 非交互安装（不提示，直接写配置）：
-#   APIHOST=https://panel.example.com APIKEY=xxxx NODEID=112 NODETYPE=shadowsocks \
-#     bash <(curl -sL ...)
-#
-set -euo pipefail
+
+red='\033[0;31m'
+green='\033[0;32m'
+yellow='\033[0;33m'
+plain='\033[0m'
 
 REPO="Minerchu/v3bx"
-BIN_DIR="/usr/local/V2bX"
-CONF_DIR="/etc/V2bX"
-SVC_NAME="V2bX"
-VERSION="${VERSION:-latest}"
+SCRIPT_URL="https://raw.githubusercontent.com/${REPO}/main"
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; BLUE='\033[0;36m'; NC='\033[0m'
-info()  { printf "${BLUE}[*]${NC} %s\n" "$*"; }
-ok()    { printf "${GREEN}[+]${NC} %s\n" "$*"; }
-warn()  { printf "${YELLOW}[!]${NC} %s\n" "$*"; }
-die()   { printf "${RED}[x]${NC} %s\n" "$*" >&2; exit 1; }
+cur_dir=$(pwd)
 
-# ---------- 前置检查 ----------
-[ "$(id -u)" -eq 0 ] || die "请用 root 运行"
+# check root
+[[ $EUID -ne 0 ]] && echo -e "${red}错误：${plain} 必须使用root用户运行此脚本！\n" && exit 1
 
-case "$(uname -m)" in
-    x86_64|amd64)   ARCH="amd64" ;;
-    aarch64|arm64)  ARCH="arm64" ;;
-    *) die "不支持的架构：$(uname -m)（仅提供 amd64 / arm64）" ;;
-esac
-info "系统架构：$(uname -m) → $ARCH"
-
-command -v curl >/dev/null 2>&1 || die "缺少 curl，请先安装：apt install -y curl / yum install -y curl"
-command -v tar  >/dev/null 2>&1 || true
-
-# ---------- 解析下载地址 ----------
-if [ "$VERSION" = "latest" ]; then
-    DL_URL="https://github.com/${REPO}/releases/latest/download/V2bX-linux-${ARCH}"
-    API_URL="https://api.github.com/repos/${REPO}/releases/latest"
+# check os
+if [[ -f /etc/redhat-release ]]; then
+    release="centos"
+elif cat /etc/issue | grep -Eqi "alpine"; then
+    release="alpine"
+elif cat /etc/issue | grep -Eqi "debian"; then
+    release="debian"
+elif cat /etc/issue | grep -Eqi "ubuntu"; then
+    release="ubuntu"
+elif cat /etc/issue | grep -Eqi "centos|red hat|redhat|rocky|alma|oracle linux"; then
+    release="centos"
+elif cat /proc/version | grep -Eqi "debian"; then
+    release="debian"
+elif cat /proc/version | grep -Eqi "ubuntu"; then
+    release="ubuntu"
+elif cat /proc/version | grep -Eqi "centos|red hat|redhat|rocky|alma|oracle linux"; then
+    release="centos"
+elif cat /proc/version | grep -Eqi "arch"; then
+    release="arch"
 else
-    DL_URL="https://github.com/${REPO}/releases/download/${VERSION}/V2bX-linux-${ARCH}"
-    API_URL="https://api.github.com/repos/${REPO}/releases/tags/${VERSION}"
+    echo -e "${red}未检测到系统版本，请联系脚本作者！${plain}\n" && exit 1
 fi
 
-TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "$TMP_DIR"' EXIT
-TMP_BIN="${TMP_DIR}/V2bX"
+arch=$(uname -m)
 
-info "下载 V2bX (${ARCH})..."
-CURL_OPTS="-fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300"
-if [ -t 2 ]; then
-    CURL_OPTS="$CURL_OPTS --progress-bar"
+if [[ $arch == "x86_64" || $arch == "x64" || $arch == "amd64" ]]; then
+    arch="64"
+elif [[ $arch == "aarch64" || $arch == "arm64" ]]; then
+    arch="arm64-v8a"
+elif [[ $arch == "s390x" ]]; then
+    arch="s390x"
 else
-    CURL_OPTS="$CURL_OPTS -sS"
-fi
-if ! curl $CURL_OPTS -o "$TMP_BIN" "$DL_URL"; then
-    die "下载失败：$DL_URL
-可尝试手动下载后放到 ${BIN_DIR}/V2bX"
-fi
-[ -s "$TMP_BIN" ] || die "下载的文件为空"
-
-# ---------- 校验 ----------
-EXPECTED_SHA=""
-if command -v python3 >/dev/null 2>&1; then
-    EXPECTED_SHA="$(curl -s --max-time 20 "$API_URL" 2>/dev/null | python3 -c "
-import sys, json
-try:
-    d = json.load(sys.stdin)
-except Exception:
-    sys.exit(0)
-name = 'V2bX-linux-${ARCH}'
-for a in d.get('assets', []):
-    if a.get('name') == name:
-        print((a.get('digest') or '').replace('sha256:', ''))
-        break
-" 2>/dev/null || true)"
+    echo -e "${red}检测到不支持的架构：${arch}，本版本仅提供 x86_64 / aarch64${plain}\n"
+    exit 1
 fi
 
-if [ -n "$EXPECTED_SHA" ]; then
-    ACTUAL_SHA="$(sha256sum "$TMP_BIN" | awk '{print $1}')"
-    if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
-        die "校验失败，文件可能损坏
-  期望: $EXPECTED_SHA
-  实际: $ACTUAL_SHA"
+echo "架构: ${arch}"
+
+if [ "$(getconf WORD_BIT)" != '32' ] && [ "$(getconf LONG_BIT)" != '64' ] ; then
+    echo "本软件不支持 32 位系统(x86)，请使用 64 位系统(x86_64)，如果检测有误，请联系作者"
+    exit 2
+fi
+
+# os version
+if [[ -f /etc/os-release ]]; then
+    os_version=$(awk -F'[= ."]' '/VERSION_ID/{print $3}' /etc/os-release)
+fi
+if [[ -z "$os_version" && -f /etc/lsb-release ]]; then
+    os_version=$(awk -F'[= ."]+' '/DISTRIB_RELEASE/{print $2}' /etc/lsb-release)
+fi
+
+if [[ x"${release}" == x"centos" ]]; then
+    if [[ ${os_version} -le 6 ]]; then
+        echo -e "${red}请使用 CentOS 7 或更高版本的系统！${plain}\n" && exit 1
     fi
-    ok "SHA256 校验通过"
-else
-    warn "未能获取官方校验值，跳过校验"
+    if [[ ${os_version} -eq 7 ]]; then
+        echo -e "${red}注意： CentOS 7 无法使用hysteria1/2协议！${plain}\n"
+    fi
+elif [[ x"${release}" == x"ubuntu" ]]; then
+    if [[ ${os_version} -lt 16 ]]; then
+        echo -e "${red}请使用 Ubuntu 16 或更高版本的系统！${plain}\n" && exit 1
+    fi
+elif [[ x"${release}" == x"debian" ]]; then
+    if [[ ${os_version} -lt 8 ]]; then
+        echo -e "${red}请使用 Debian 8 或更高版本的系统！${plain}\n" && exit 1
+    fi
 fi
 
-# 确认是 ELF 可执行文件
-if command -v file >/dev/null 2>&1; then
-    file "$TMP_BIN" | grep -qi 'ELF' || die "下载内容不是可执行文件"
-fi
-chmod +x "$TMP_BIN"
-
-# ---------- 判断是否已安装 ----------
-INSTALLED=0
-[ -f "${BIN_DIR}/V2bX" ] && INSTALLED=1
-
-HAS_SYSTEMD=0
-command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ] && HAS_SYSTEMD=1
-
-stop_service() {
-    if [ "$HAS_SYSTEMD" -eq 1 ] && systemctl list-unit-files 2>/dev/null | grep -q "^${SVC_NAME}.service"; then
-        systemctl stop "$SVC_NAME" 2>/dev/null || true
+install_base() {
+    if [[ x"${release}" == x"centos" ]]; then
+        yum install epel-release wget curl unzip tar crontabs socat ca-certificates -y >/dev/null 2>&1
+        update-ca-trust force-enable >/dev/null 2>&1
+    elif [[ x"${release}" == x"alpine" ]]; then
+        apk add wget curl unzip tar socat ca-certificates >/dev/null 2>&1
+        update-ca-certificates >/dev/null 2>&1
+    elif [[ x"${release}" == x"debian" ]]; then
+        apt-get update -y >/dev/null 2>&1
+        apt install wget curl unzip tar cron socat ca-certificates -y >/dev/null 2>&1
+        update-ca-certificates >/dev/null 2>&1
+    elif [[ x"${release}" == x"ubuntu" ]]; then
+        apt-get update -y >/dev/null 2>&1
+        apt install wget curl unzip tar cron socat -y >/dev/null 2>&1
+        apt-get install ca-certificates wget -y >/dev/null 2>&1
+        update-ca-certificates >/dev/null 2>&1
+    elif [[ x"${release}" == x"arch" ]]; then
+        pacman -Sy --noconfirm >/dev/null 2>&1
+        pacman -S --noconfirm --needed wget curl unzip tar cron socat >/dev/null 2>&1
+        pacman -S --noconfirm --needed ca-certificates wget >/dev/null 2>&1
     fi
 }
 
-start_service() {
-    if [ "$HAS_SYSTEMD" -eq 1 ]; then
-        systemctl daemon-reload
-        systemctl enable "$SVC_NAME" >/dev/null 2>&1 || true
-        systemctl restart "$SVC_NAME"
-        sleep 2
-        if systemctl is-active --quiet "$SVC_NAME"; then
-            ok "服务已启动：${SVC_NAME}"
+# 0: running, 1: not running, 2: not installed
+check_status() {
+    if [[ ! -f /usr/local/V2bX/V2bX ]]; then
+        return 2
+    fi
+    if [[ x"${release}" == x"alpine" ]]; then
+        temp=$(service V2bX status | awk '{print $3}')
+        if [[ x"${temp}" == x"started" ]]; then
+            return 0
         else
-            warn "服务启动异常，查看日志：journalctl -u ${SVC_NAME} -n 50 --no-pager"
+            return 1
         fi
     else
-        warn "未检测到 systemd，文件已安装但未启动服务"
+        temp=$(systemctl status V2bX | grep Active | awk '{print $3}' | cut -d "(" -f2 | cut -d ")" -f1)
+        if [[ x"${temp}" == x"running" ]]; then
+            return 0
+        else
+            return 1
+        fi
     fi
 }
 
-# ---------- 安装二进制 ----------
-mkdir -p "$BIN_DIR"
-if [ "$INSTALLED" -eq 1 ]; then
-    TS="$(date +%s)"
-    cp "${BIN_DIR}/V2bX" "${BIN_DIR}/V2bX.bak.${TS}"
-    ok "已备份旧版本：${BIN_DIR}/V2bX.bak.${TS}"
-    stop_service
-fi
-install -m 0755 "$TMP_BIN" "${BIN_DIR}/V2bX"
-ok "二进制已安装：${BIN_DIR}/V2bX"
-
-# ---------- 已有配置：直接重启结束 ----------
-if [ "$INSTALLED" -eq 1 ] && [ -f "${CONF_DIR}/config.json" ]; then
-    start_service
-    echo
-    ok "升级完成。配置文件保持不变：${CONF_DIR}/config.json"
-    echo
-    info "面板里该节点若已选 shadow-tls 插件，V2bX 会自动生成外层，无需额外操作。"
-    exit 0
-fi
-
-# ---------- 全新安装：收集面板信息 ----------
-echo
-info "首次安装，需要填写面板对接信息（直接回车使用默认值）"
-
-ask() {
-    local prompt="$1" default="$2" var=""
-    local q
-    q="$(printf "${BLUE}[?]${NC} %s" "$prompt")"
-    if [ -t 0 ]; then
-        read -r -p "$q" var || var=""
-    elif { : < /dev/tty; } 2>/dev/null; then
-        # curl | bash 的场景：stdin 被占用，改从终端读
-        read -r -p "$q" var < /dev/tty || var=""
+install_V2bX() {
+    # 备份旧二进制，出问题可回滚
+    if [[ -f /usr/local/V2bX/V2bX ]]; then
+        local bak="/usr/local/V2bX/V2bX.bak.$(date +%Y%m%d%H%M%S)"
+        cp /usr/local/V2bX/V2bX "$bak" 2>/dev/null && echo -e "${green}已备份旧版本：${bak}${plain}"
+        # 只保留最近 3 个备份
+        ls -1t /usr/local/V2bX/V2bX.bak.* 2>/dev/null | tail -n +4 | xargs -r rm -f
     fi
-    [ -z "$var" ] && var="$default"
-    printf '%s' "$var"
+
+    if [[ -e /usr/local/V2bX/ ]]; then
+        rm -rf /usr/local/V2bX/
+    fi
+
+    mkdir /usr/local/V2bX/ -p
+    cd /usr/local/V2bX/
+
+    if  [ $# == 0 ] ;then
+        last_version=$(curl -Ls "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+        if [[ ! -n "$last_version" ]]; then
+            echo -e "${red}检测版本失败，可能是超出 Github API 限制，请稍后再试，或手动指定版本安装${plain}"
+            echo -e "${yellow}例如：bash install.sh v1.1.0${plain}"
+            exit 1
+        fi
+        echo -e "检测到最新版本：${last_version}，开始安装"
+        wget --no-check-certificate -N --progress=bar -O /usr/local/V2bX/V2bX-linux.zip "https://github.com/${REPO}/releases/download/${last_version}/V2bX-linux-${arch}.zip"
+        if [[ $? -ne 0 ]]; then
+            echo -e "${red}下载失败，请确保你的服务器能够下载 Github 的文件${plain}"
+            exit 1
+        fi
+    else
+        last_version=$1
+        url="https://github.com/${REPO}/releases/download/${last_version}/V2bX-linux-${arch}.zip"
+        echo -e "开始安装 ${last_version}"
+        wget --no-check-certificate -N --progress=bar -O /usr/local/V2bX/V2bX-linux.zip ${url}
+        if [[ $? -ne 0 ]]; then
+            echo -e "${red}下载 ${last_version} 失败，请确保此版本存在${plain}"
+            exit 1
+        fi
+    fi
+
+    # 校验完整性（拿不到校验文件就跳过，不阻断安装）
+    if wget -q --no-check-certificate -O /usr/local/V2bX/V2bX-linux.zip.dgst \
+        "https://github.com/${REPO}/releases/download/${last_version}/V2bX-linux-${arch}.zip.dgst" 2>/dev/null; then
+        expect_sha=$(grep -o 'SHA2-256=.*' /usr/local/V2bX/V2bX-linux.zip.dgst | awk -F'= ' '{print $2}' | tr -d ' ')
+        if [[ -n "$expect_sha" ]] && command -v sha256sum >/dev/null 2>&1; then
+            actual_sha=$(sha256sum V2bX-linux.zip | awk '{print $1}')
+            if [[ "$expect_sha" != "$actual_sha" ]]; then
+                echo -e "${red}安装包校验失败，文件可能损坏，请重试${plain}"
+                exit 1
+            fi
+            echo -e "${green}安装包校验通过${plain}"
+        fi
+        rm -f V2bX-linux.zip.dgst
+    fi
+
+    unzip V2bX-linux.zip
+    if [[ ! -f V2bX ]]; then
+        echo -e "${red}解压失败，未找到 V2bX 可执行文件${plain}"
+        exit 1
+    fi
+    rm V2bX-linux.zip -f
+    chmod +x V2bX
+    mkdir /etc/V2bX/ -p
+    cp geoip.dat /etc/V2bX/
+    cp geosite.dat /etc/V2bX/
+    if [[ x"${release}" == x"alpine" ]]; then
+        rm /etc/init.d/V2bX -f
+        cat <<EOF > /etc/init.d/V2bX
+#!/sbin/openrc-run
+
+name="V2bX"
+description="V2bX"
+
+command="/usr/local/V2bX/V2bX"
+command_args="server"
+command_user="root"
+
+pidfile="/run/V2bX.pid"
+command_background="yes"
+
+depend() {
+        need net
 }
-
-APIHOST="${APIHOST:-}"
-APIKEY="${APIKEY:-}"
-NODEID="${NODEID:-}"
-NODETYPE="${NODETYPE:-shadowsocks}"
-LISTENIP="${LISTENIP:-0.0.0.0}"
-
-if [ -z "$APIHOST" ]; then
-    APIHOST="$(ask "面板地址（如 https://panel.example.com）: " "")"
-fi
-[ -n "$APIHOST" ] || die "面板地址不能为空"
-
-if [ -z "$APIKEY" ]; then
-    APIKEY="$(ask "节点通讯密钥（面板里节点的 API Key）: " "")"
-fi
-[ -n "$APIKEY" ] || die "通讯密钥不能为空"
-
-if [ -z "$NODEID" ]; then
-    NODEID="$(ask "节点 ID（面板里节点的数字 ID）: " "")"
-fi
-[ -n "$NODEID" ] || die "节点 ID 不能为空"
-
-NODETYPE="$(ask "节点类型 [shadowsocks]: " "$NODETYPE")"
-LISTENIP="$(ask "监听地址 [0.0.0.0]: " "$LISTENIP")"
-
-mkdir -p "$CONF_DIR"
-
-# 内核基础配置
-if [ ! -f "${CONF_DIR}/sing_origin.json" ]; then
-    cat > "${CONF_DIR}/sing_origin.json" <<'JSON'
-{
-  "dns": {
-    "servers": [
-      { "tag": "cf", "address": "1.1.1.1", "strategy": "ipv4_only" }
-    ]
-  },
-  "outbounds": [
-    { "tag": "direct", "type": "direct", "domain_strategy": "ipv4_only" },
-    { "type": "block", "tag": "block" }
-  ],
-  "route": {
-    "rules": [
-      { "ip_version": 6, "outbound": "block" },
-      { "ip_is_private": true, "outbound": "block" }
-    ],
-    "final": "direct"
-  }
-}
-JSON
-    ok "已生成内核配置：${CONF_DIR}/sing_origin.json"
-fi
-
-# 节点配置
-if [ -f "${CONF_DIR}/config.json" ]; then
-    warn "已存在 ${CONF_DIR}/config.json，保留原文件，未覆盖"
-    warn "如需添加新节点，请手动编辑该文件"
-else
-    cat > "${CONF_DIR}/config.json" <<JSON
-{
-  "Log": { "Level": "info", "Output": "" },
-  "Cores": [
-    {
-      "Type": "sing",
-      "Log": { "Level": "info", "Timestamp": true },
-      "NTP": { "Enable": false, "Server": "time.apple.com", "ServerPort": 0 },
-      "OriginalPath": "${CONF_DIR}/sing_origin.json"
-    }
-  ],
-  "Nodes": [
-    {
-      "Core": "sing",
-      "ApiHost": "${APIHOST}",
-      "ApiKey": "${APIKEY}",
-      "NodeID": ${NODEID},
-      "NodeType": "${NODETYPE}",
-      "Timeout": 30,
-      "ListenIP": "${LISTENIP}",
-      "SendIP": "0.0.0.0",
-      "DeviceOnlineMinTraffic": 200,
-      "MinReportTraffic": 0,
-      "TCPFastOpen": true,
-      "SniffEnabled": true
-    }
-  ]
-}
-JSON
-    chmod 600 "${CONF_DIR}/config.json"
-    ok "已生成节点配置：${CONF_DIR}/config.json"
-fi
-
-# systemd 单元
-if [ "$HAS_SYSTEMD" -eq 1 ] && [ ! -f "/etc/systemd/system/${SVC_NAME}.service" ]; then
-    cat > "/etc/systemd/system/${SVC_NAME}.service" <<UNIT
+EOF
+        chmod +x /etc/init.d/V2bX
+        rc-update add V2bX default
+        echo -e "${green}V2bX ${last_version}${plain} 安装完成，已设置开机自启"
+    else
+        rm /etc/systemd/system/V2bX.service -f
+        cat <<EOF > /etc/systemd/system/V2bX.service
 [Unit]
 Description=V2bX Service
 After=network.target nss-lookup.target
+Wants=network.target
 
 [Service]
-Type=simple
 User=root
-ExecStart=${BIN_DIR}/V2bX server -c ${CONF_DIR}/config.json
-Restart=on-failure
-RestartSec=5
-LimitNOFILE=1048576
+Group=root
+Type=simple
+LimitAS=infinity
+LimitRSS=infinity
+LimitCORE=infinity
+LimitNOFILE=999999
+WorkingDirectory=/usr/local/V2bX/
+ExecStart=/usr/local/V2bX/V2bX server
+Restart=always
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
-UNIT
-    ok "已创建 systemd 服务：${SVC_NAME}"
-fi
+EOF
+        systemctl daemon-reload
+        systemctl stop V2bX
+        systemctl enable V2bX
+        echo -e "${green}V2bX ${last_version}${plain} 安装完成，已设置开机自启"
+    fi
 
-start_service
+    if [[ ! -f /etc/V2bX/config.json ]]; then
+        cp config.json /etc/V2bX/
+        echo -e ""
+        echo -e "全新安装，请先参看教程：https://v2bx.v-50.me/，配置必要的内容"
+        first_install=true
+    else
+        if [[ x"${release}" == x"alpine" ]]; then
+            service V2bX start
+        else
+            systemctl start V2bX
+        fi
+        sleep 2
+        check_status
+        echo -e ""
+        if [[ $? == 0 ]]; then
+            echo -e "${green}V2bX 重启成功${plain}"
+        else
+            echo -e "${red}V2bX 可能启动失败，请稍后使用 V2bX log 查看日志信息，若无法启动，则可能更改了配置格式，请前往 wiki 查看：https://github.com/V2bX-project/V2bX/wiki${plain}"
+        fi
+        first_install=false
+    fi
 
-echo
-ok "安装完成"
-echo
-printf "  面板地址   %s\n" "$APIHOST"
-printf "  节点 ID    %s\n" "$NODEID"
-printf "  节点类型   %s\n" "$NODETYPE"
-printf "  配置目录   %s\n" "$CONF_DIR"
-echo
-info "下一步：在面板里把该节点建成 shadowsocks，插件选 shadow-tls，"
-info "参数填 host=www.php.net;password=你的密码;version=3"
-info "保存后 V2bX 会在 60 秒内自动生成 shadowtls 外层，无需重启。"
-echo
-info "查看日志：journalctl -u ${SVC_NAME} -f"
+    # 配置文件：已存在的不覆盖，缺失的补上
+    for f in dns.json route.json custom_outbound.json custom_inbound.json sing_origin.json; do
+        if [[ ! -f /etc/V2bX/${f} ]]; then
+            cp ${f} /etc/V2bX/ 2>/dev/null || true
+        fi
+    done
+
+    curl -o /usr/bin/V2bX -Ls ${SCRIPT_URL}/V2bX.sh
+    chmod +x /usr/bin/V2bX
+    if [ ! -L /usr/bin/v2bx ]; then
+        ln -s /usr/bin/V2bX /usr/bin/v2bx
+        chmod +x /usr/bin/v2bx
+    fi
+    cd $cur_dir
+    rm -f install.sh
+    echo -e ""
+    echo "V2bX 管理脚本使用方法 (兼容使用V2bX执行，大小写不敏感): "
+    echo "------------------------------------------"
+    echo "V2bX              - 显示管理菜单 (功能更多)"
+    echo "V2bX start        - 启动 V2bX"
+    echo "V2bX stop         - 停止 V2bX"
+    echo "V2bX restart      - 重启 V2bX"
+    echo "V2bX status       - 查看 V2bX 状态"
+    echo "V2bX enable       - 设置 V2bX 开机自启"
+    echo "V2bX disable      - 取消 V2bX 开机自启"
+    echo "V2bX log          - 查看 V2bX 日志"
+    echo "V2bX x25519       - 生成 x25519 密钥"
+    echo "V2bX generate     - 生成 V2bX 配置文件"
+    echo "V2bX update       - 更新 V2bX"
+    echo "V2bX update x.x.x - 更新 V2bX 指定版本"
+    echo "V2bX install      - 安装 V2bX"
+    echo "V2bX uninstall    - 卸载 V2bX"
+    echo "V2bX version      - 查看 V2bX 版本"
+    echo "------------------------------------------"
+    # 首次安装询问是否生成配置文件
+    if [[ $first_install == true ]]; then
+        read -rp "检测到你为第一次安装V2bX,是否自动直接生成配置文件？(y/n): " if_generate
+        if [[ $if_generate == [Yy] ]]; then
+            curl -o ./initconfig.sh -Ls ${SCRIPT_URL}/initconfig.sh
+            source initconfig.sh
+            rm initconfig.sh -f
+            generate_config_file
+        fi
+    fi
+}
+
+echo -e "${green}开始安装${plain}"
+install_base
+install_V2bX $1

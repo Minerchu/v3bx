@@ -16,25 +16,55 @@ A V2board node server based on multi core, modified from XrayR.
 
 **注意： 本项目需要搭配[修改版V2board](https://github.com/wyx2685/v2board)**
 
-## 快速安装
+## 软件安装
 
-一条命令，自动识别架构、下载对应二进制、校验、装服务：
+### 一键安装
 
-```bash
-bash <(curl -sL https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh)
-```
-
-- **新机器**：提示填写面板地址、通讯密钥、节点 ID，自动生成配置并启动
-- **已装过**：自动备份旧版本、替换二进制、重启服务，配置文件不动
-
-非交互部署（脚本化 / 批量装机）：
+命令、流程、管理菜单和官方完全一致，只是下载源换成本项目：
 
 ```bash
-APIHOST=https://panel.example.com APIKEY=xxxx NODEID=112 \
-  bash <(curl -sL https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh)
+wget -N https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh && bash install.sh
 ```
 
-装完在面板里把该节点建成 `shadowsocks`，插件选 `shadow-tls`，参数填 `host=www.php.net;password=你的密码;version=3`。保存后 V2bX 会在 60 秒内自动生成 shadowtls 外层，**不用重启，也没有额外配置项**。
+脚本会自动识别系统与架构（x86_64 / aarch64）、装依赖、下载安装包、校验 SHA256、写 systemd（Alpine 用 openrc）、设置开机自启，并安装 `V2bX` 管理命令。
+
+装完第一次会问你要不要生成配置文件，选 `y` 走向导填面板地址、API Key、节点 ID 即可。
+
+### 管理命令
+
+和官方完全一致（大小写不敏感）：
+
+```bash
+V2bX              # 管理菜单（0-17）
+V2bX start        # 启动
+V2bX stop         # 停止
+V2bX restart      # 重启
+V2bX status       # 状态
+V2bX log          # 日志
+V2bX config       # 改配置
+V2bX update       # 更新到最新版
+V2bX update 1.1.0 # 更新到指定版本
+V2bX install      # 重装
+V2bX uninstall    # 卸载
+V2bX version      # 版本
+V2bX generate     # 重新生成配置文件
+V2bX x25519       # 生成 x25519 密钥
+```
+
+### 指定版本安装
+
+```bash
+wget -N https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh && bash install.sh v1.1.0
+```
+
+### 从官方 V2bX 迁移过来
+
+直接跑上面的安装命令即可：配置在 `/etc/V2bX/`，安装器只替换 `/usr/local/V2bX/` 下的二进制，配置原样保留，装完自动重启。
+
+### 手动安装
+
+[手动安装教程](https://v2bx.v-50.me/v2bx/v2bx-xia-zai-he-an-zhuang/install/manual)
+
 
 ## 特点
 
@@ -69,18 +99,6 @@ APIHOST=https://panel.example.com APIKEY=xxxx NODEID=112 \
 
 - [ ] 重新实现动态限速
 - [ ] 完善使用文档
-
-## 软件安装
-
-### 一键安装
-
-```
-wget -N https://raw.githubusercontent.com/wyx2685/V2bX-script/master/install.sh && bash install.sh
-```
-
-### 手动安装
-
-[手动安装教程](https://v2bx.v-50.me/v2bx/v2bx-xia-zai-he-an-zhuang/install/manual)
 
 ## 构建
 ``` bash
