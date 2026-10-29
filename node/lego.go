@@ -32,10 +32,17 @@ type Lego struct {
 }
 
 func NewLego(config *conf.CertConfig) (*Lego, error) {
+    acmeEmail := config.Email
+    if acmeEmail == "" {
+        acmeEmail = config.DNSEnv["CLOUDFLARE_EMAIL"]
+    }
+    if acmeEmail == "" {
+        return nil, fmt.Errorf("CertConfig.Email is empty: set a Lets Encrypt account email, or CLOUDFLARE_EMAIL in DNSEnv")
+    }
 	user, err := NewLegoUser(path.Join(path.Dir(config.CertFile),
 		"user",
-		fmt.Sprintf("user-%s.json", config.Email)),
-		config.Email)
+		fmt.Sprintf("user-%s.json", acmeEmail)),
+		acmeEmail)
 	if err != nil {
 		return nil, fmt.Errorf("create user error: %s", err)
 	}
@@ -143,7 +150,7 @@ func (l *Lego) CheckCert(file []byte) (bool, error) {
 }
 func (l *Lego) parseParams(path string) string {
 	r := strings.NewReplacer("{domain}", l.config.CertDomain,
-		"{email}", l.config.Email)
+		"{email}", l.acmeEmail)
 	return r.Replace(path)
 }
 func (l *Lego) writeCert(certificates *certificate.Resource) error {
