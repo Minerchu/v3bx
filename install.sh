@@ -201,6 +201,24 @@ install_panel() {
     echo ""
 }
 
+update_panel_files() {
+    # 面板已装：只更新代码，端口/账号/密码全保留
+    local tmp changed=0
+    tmp=$(mktemp -d)
+    for f in panel.py ui.html; do
+        curl -fsSL -o "${tmp}/${f}" "${SCRIPT_URL}/panel/${f}" || { rm -rf "$tmp"; return 0; }
+    done
+    cmp -s "${tmp}/panel.py" /opt/v2bx-panel/panel.py || changed=1
+    cmp -s "${tmp}/ui.html"  /opt/v2bx-panel/ui.html  || changed=1
+    if [[ $changed == 1 ]]; then
+        cp "${tmp}/panel.py" "${tmp}/ui.html" /opt/v2bx-panel/
+        chmod 755 /opt/v2bx-panel/panel.py
+        systemctl restart v2bx-panel 2>/dev/null || service v2bx-panel restart 2>/dev/null
+        echo -e "${green}面板已同步到最新版${plain}"
+    fi
+    rm -rf "$tmp"
+}
+
 install_V2bX() {
     # 备份旧二进制，出问题可回滚（放在独立目录，避免随安装目录一起被清掉）
     if [[ -f /usr/local/V2bX/V2bX ]]; then
@@ -380,9 +398,11 @@ EOF
     echo "v3bx uninstall    - 卸载"
     echo "v3bx version      - 查看版本"
     echo "------------------------------------------"
-    # 面板没装就装一个（首装和升级都适用）；明确跳过的写标记，之后不再打扰
+    # 面板没装就装一个；已装则只同步代码，端口账号密码不动
     if [[ ! -f /opt/v2bx-panel/panel.py && ! -f /etc/v2bx-panel/.skipped ]]; then
         install_panel
+    elif [[ -f /opt/v2bx-panel/panel.py ]]; then
+        update_panel_files
     fi
 }
 
