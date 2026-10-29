@@ -1607,7 +1607,8 @@ class Store:
                                            f'<br><code>{(r.get("log") or "")[-600:]}</code>'}]}
                 made.append(f'{domain}（{info["state"]}）')
             if made:
-                steps.append({'name': '生成自签证书', 'ok': True, 'detail': '、'.join(made)})
+                steps.append({'name': '生成自签证书（客户端需开 insecure）', 'ok': True,
+                              'detail': '、'.join(made)})
 
             # 自签证书警告：客户端不跳过验证必然握手失败。
             # 这是 hy2/trojan「服务端一切正常但客户端连不上」最常见的原因——
