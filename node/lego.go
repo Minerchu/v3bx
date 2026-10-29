@@ -37,7 +37,7 @@ func NewLego(config *conf.CertConfig) (*Lego, error) {
         acmeEmail = config.DNSEnv["CLOUDFLARE_EMAIL"]
     }
     if acmeEmail == "" {
-        return nil, fmt.Errorf("CertConfig.Email 涓嶈兘涓虹┖")
+        return nil, fmt.Errorf("CertConfig.Email is empty: set a Lets Encrypt account email, or CLOUDFLARE_EMAIL in DNSEnv")
     }
 	user, err := NewLegoUser(path.Join(path.Dir(config.CertFile),
 		"user",
