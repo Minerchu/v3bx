@@ -403,6 +403,62 @@ def svc_status(name):
 def svc_restart(name):
     return run(['systemctl', 'restart', name], timeout=40)
 
+
+def sync_port_hop():
+    """端口跳跃（mport）规则的目标端口，跟着 V2bX 实际监听的端口走。
+
+    踩过的坑：用户在 Xboard 把 hy2 端口从 443 改成 2500，V2bX 也监听 2500 了，
+    但 `udp 50000-51000 REDIRECT --to-ports 443` 这条老规则还指着 443。
+    客户端订阅里带 mport 时，包全被转到没人监听的 443，表现就是
+    「hy2 连不上，但同一台机器的 ss 正常、别的机器的 hy2 也正常」——
+    因为 ss 走 TCP、别的 hy2 在别的机器上。
+
+    只在「目标端口确实没人监听」时才改，用户自定义的其他 REDIRECT 不动。
+    返回改动列表（空列表表示不需要改）。
+    """
+    code, out = run(['iptables', '-t', 'nat', '-S', 'PREROUTING'], timeout=6)
+    if code != 0 or 'REDIRECT' not in out:
+        return []
+
+    live, v2bx_udp = set(), set()
+    code2, ssout = run(['ss', '-ulnp'], timeout=6)
+    if code2 == 0:
+        for line in ssout.splitlines():
+            m = re.search(r':(\d{1,5})\s', line)
+            if not m:
+                continue
+            port = int(m.group(1))
+            live.add(port)
+            if 'V2bX' in line:
+                v2bx_udp.add(port)
+    if not v2bx_udp:
+        return []
+
+    newport = sorted(v2bx_udp)[0]
+    fixes = []
+    for line in out.splitlines():
+        if 'REDIRECT' not in line or '--dport' not in line:
+            continue
+        mt = re.search(r'--to-ports\s+(\d+)', line)
+        if not mt:
+            continue
+        target = int(mt.group(1))
+        if target in live or target == newport:
+            continue          # 目标端口有服务在听，或已经是对的，不动
+        old_args = line[3:].split()
+        new_args = line.replace(f'--to-ports {target}',
+                                f'--to-ports {newport}')[3:].split()
+        c1, _ = run(['iptables', '-t', 'nat', '-D'] + old_args, timeout=6)
+        if c1 != 0:
+            continue
+        c2, _ = run(['iptables', '-t', 'nat', '-A'] + new_args, timeout=6)
+        if c2 == 0:
+            fixes.append(f'{target} → {newport}')
+    if fixes:
+        # 存盘，否则重启机器后规则又回到旧端口
+        run(['netfilter-persistent', 'save'], timeout=15)
+    return fixes
+
 def singbox_installed():
     """这台机器上有没有独立的 sing-box 实例（shadowtls + ss + hy2 那一套）。
 
@@ -1647,6 +1703,15 @@ class Store:
 
             # ---- 8. 成功 ----
             merge_creds(nodes)
+            # 端口改了但跳跃规则还指着旧端口时，客户端带 mport 会全部超时。
+            # 这一步静默修正，没改动就不出现在步骤里。
+            try:
+                hop = sync_port_hop()
+                if hop:
+                    steps.append({'name': '端口跳跃规则', 'ok': True,
+                                  'detail': '目标端口已跟随实际监听端口：' + '、'.join(hop)})
+            except Exception:
+                pass
             logs = '\n\n'.join(f'===== {s} =====\n' + get_logs(s, 30) for s in restarted)
             return {'ok': True, 'steps': steps, 'logs': logs,
                     'errors': errs,
