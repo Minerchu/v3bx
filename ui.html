@@ -730,6 +730,7 @@ function newNode(type, owner) {
     upMbps: 100, downMbps: 500, obfs: '', obfsPassword: '',
     masquerade: 'https://www.bing.com', congestionControl: 'bbr',
     stlsDetourPort: 0, stlsHandshake: 'www.php.net', stlsPassword: '',
+    outbound: {type: 'direct', socks5: {server: '', port: 1080, username: '', password: ''}},
   };
 }
 
@@ -970,6 +971,27 @@ function renderForm() {
     H.push('<div class="tip">该协议<b>不需要 TLS</b>，证书配置已跳过。</div>');
   }
 
+  // ---- 出口 ----
+  const outCfg = n.outbound || {type: 'direct', socks5: {}};
+  const s5cfg = outCfg.socks5 || {};
+  H.push('<fieldset><legend>出口</legend>');
+  H.push('<div class="grid2"><div class="f"><label>出口方式</label><select data-f="outType">' +
+    '<option value="direct"' + (outCfg.type !== 'socks5' ? ' selected' : '') + '>本地直连（走本机出口）</option>' +
+    '<option value="socks5"' + (outCfg.type === 'socks5' ? ' selected' : '') + '>SOCKS5 代理</option>' +
+    '</select><div class="hint">该节点所有流量从哪里出去。</div></div></div>');
+  if (outCfg.type === 'socks5') {
+    H.push('<div class="grid2">' +
+      '<div class="f"><label>服务器地址 <span class="req">*</span></label><input data-f="s5server" value="' + esc(s5cfg.server || '') + '" placeholder="1.2.3.4"></div>' +
+      '<div class="f"><label>端口</label><input data-f="s5port" type="number" value="' + esc(String(s5cfg.port || 1080)) + '"></div>' +
+    '</div>');
+    H.push('<div class="grid2">' +
+      '<div class="f"><label>用户名（可选）</label><input data-f="s5user" value="' + esc(s5cfg.username || '') + '"></div>' +
+      '<div class="f"><label>密码（可选）</label><input data-f="s5pass" type="password" value="' + esc(s5cfg.password || '') + '"></div>' +
+    '</div>');
+    H.push('<div class="hint">sing 内核：面板会写进 sing_origin.json 的路由规则；xray 内核：V2bX 直接用它作出站。</div>');
+  }
+  H.push('</fieldset>');
+
   H.push('<div class="f"><label>备注</label><input data-f="remark" value="' + esc(n.remark) + '" placeholder="便于识别的名字"></div>');
 
   $('#nodeForm').innerHTML = H.join('');
@@ -1167,6 +1189,20 @@ function onField(e) {
     }
     return;
   }
+  if (k === 'outType') {
+    n.outbound = n.outbound || {type: 'direct', socks5: {}};
+    n.outbound.type = v;
+    if (!n.outbound.socks5) n.outbound.socks5 = {server:'', port:1080, username:'', password:''};
+    renderForm();
+    return;
+  }
+  if (k === 's5server' || k === 's5port' || k === 's5user' || k === 's5pass') {
+    n.outbound = n.outbound || {type: 'socks5', socks5: {}};
+    if (!n.outbound.socks5) n.outbound.socks5 = {};
+    const s5map = {s5server:'server', s5port:'port', s5user:'username', s5pass:'password'};
+    n.outbound.socks5[s5map[k]] = (k === 's5port') ? (v === '' ? 1080 : Number(v)) : v;
+    return;
+  }
   n[k] = v;
 }
 
@@ -1234,9 +1270,9 @@ async function doIssue() {
         {name: 'V2bX 内置 lego', ok: true, detail: '部署时自动申请'},
       ], '<div class="tip" style="margin-bottom:12px">这台机器没装 acme.sh，<b>不需要装</b>。' +
         '直接点「保存」再点「部署到服务器」，V2bX 启动时会用内置 lego 按上面的 DNS 凭据自动签证书。' +
-        '去日志页看 v3bx 日志，出现 <code>obtain certificate</code> 就是签成功了。</div>' +
-        '<pre class="log" style="max-height:200px">' + esc(r.log || '') + '</pre>', []);
-      toast('直接点部署就行，证书会自动签', 'ok');
+        '签完去日志页看到 <code>obtain certificate</code> 就是成功了。</div>' +
+        '<pre class="log">' + esc(r.log || '') + '</pre>', []);
+      toast('没装 acme.sh 不影响：点「部署」由 V2bX 自己签', 'ok');
     } else {
       showResult(isSelf ? '生成自签证书失败' : '证书申请失败',
                  [{name: isSelf ? 'openssl' : 'acme.sh', ok: false, detail: '失败'}],
