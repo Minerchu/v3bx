@@ -16,7 +16,7 @@
 | **shadow-tls v3** | 需自行拼双层入站 | 面板插件选 `shadow-tls`、参数填 `host=...;password=...;version=3`，自动生成 shadowtls 外层 + shadowsocks 内层，用户/流量/心跳照旧 · [说明](./SHADOWTLS.md) |
 | **改限速** | 判定为「删用户 + 加用户」，踢掉该用户全部连接 | 按 uuid 比对，限速变化走热更新，连接不断 |
 | **踢人 / 用户到期** | 有概率 `fatal error`，**整进程退出**，同机全节点掉线 | 加锁 + 快照 + 幂等，只关目标链路 |
-| **加节点** | SSH 手改 `config.json`，写错一处整机全挂 | Web 面板填表，写错当场拦住，改崩自动回滚 · [面板](./panel/) |
+| **加节点** | SSH 手改 `config.json`，写错一处整机全挂 | 装完自带 Web 面板，浏览器填表，写错当场拦住，改崩自动回滚 · [面板](./panel/) |
 
 > 三个改动都不涉及配置格式变更。从上游或官方版迁过来，直接跑安装命令即可，`/etc/V2bX/` 原样保留。
 
@@ -63,42 +63,6 @@ V2bX generate     # 重新生成配置文件
 V2bX x25519       # 生成 x25519 密钥
 ```
 
-### 面板管理
-
-管理菜单 **17** 是节点管理面板的入口，主菜单底部也会直接显示面板状态和端口，不用再翻 `/etc/v2bx-panel/panel.env`：
-
-```
-面板状态: 已运行  端口 18080  http://1.2.3.4:18080/
-```
-
-进去之后：
-
-| 选项 | 作用 |
-|---|---|
-| 1 | 查看面板信息（访问地址、监听、用户名、密码、配置文件路径） |
-| 2 / 3 / 4 | 启动 / 停止 / 重启 |
-| 5 | 面板日志（journalctl，最近 80 行） |
-| 6 | 修改监听端口（自动检查占用，重启失败自动回滚） |
-| 7 | 重置登录密码（改完直接给出新密码，不用手动删 auth.json） |
-| 8 | 安装 / 更新面板（保留现有端口、账号、密码） |
-| 9 | 卸载面板 |
-
-也可以直接敲命令：
-
-```bash
-V2bX panel          # 面板信息
-V2bX panel start    # 启动
-V2bX panel stop     # 停止
-V2bX panel restart  # 重启
-V2bX panel log      # 日志
-V2bX panel port     # 改端口
-V2bX panel passwd   # 重置密码
-V2bX panel install  # 安装/更新
-V2bX panel uninstall# 卸载
-```
-
-> 密码只在首次安装时以明文写在 `/etc/v2bx-panel/INITIAL_PASSWORD.txt`。如果你在面板里改过密码，那个文件就过期了 —— 菜单里会显示「已修改，无法查看」，用选项 7 重置即可。
-
 ### 指定版本安装
 
 ```bash
@@ -115,21 +79,57 @@ wget -N https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh && bash 
 
 ## Web 管理面板
 
-本仓库附带一个节点管理面板（[`panel/`](./panel/)），解决「每加一个节点都要 SSH 手改 `config.json`、写错一处整机节点全挂」的问题。
+**装完就有一个面板，之后不用再碰命令行。**
 
-```bash
-git clone --depth 1 https://github.com/Minerchu/v3bx.git
-cd v3bx/panel && bash install.sh
+跑完上面的安装命令，脚本会问三件事（端口、用户名、密码），然后直接把地址和账号打给你：
+
+```
+========================================================
+ 面板已就绪
+--------------------------------------------------------
+  地址    : http://1.2.3.4:18080/
+  用户名  : admin
+  密码    : 你刚设的
+========================================================
 ```
 
-![节点列表](panel/docs/screenshots/01-nodes.png)
+浏览器打开就是「对接」页，填面板地址和 API Key，点「保存并重启」，这台机器就和 Xboard 接上了。端口、密码、协议参数全部由面板下发，不用在节点机上填。
 
-- 表单按协议自动适配字段，内核只列可选项（`hysteria2` 选不到 `xray`），证书区块按协议自动显示
-- 保存前实时校验：非法 core、端口冲突、证书凭据缺失，当场标红，不进部署流程
-- 部署走事务：备份 → `sing-box check` → 原子替换 → 重启 → 两次确认 → 失败自动回滚并回显错误行
-- 内置 acme.sh DNS-01 证书申请，DNS 凭据存一次、后续节点自动继承
+![对接页](panel/docs/screenshots/05-connect.png)
 
-零依赖（Python 3 标准库）、单进程、systemd 托管，与 V2bX 二进制完全解耦。详见 [panel/README.md](./panel/README.md)。
+| 页面 | 干什么 |
+|---|---|
+| **对接** | 填 Xboard 地址 + API Key，声明跑哪几个节点 ID。「测试连接」会真的去问一次 Xboard，通不通当场知道 |
+| **节点** | 每个节点的证书、监听、协议细节；表单按协议自动适配字段，`hysteria2` 选不到 `xray` |
+| **日志** | 两个服务的日志，错误行自动高亮 |
+| **备份** | 每次改动前的配置快照，一键回滚 |
+
+部署走事务：备份 → 校验 → 原子替换 → 重启 → 两次确认 → 失败自动回滚并回显错误行。改崩了不会把机器搞挂。
+
+零依赖（Python 3 标准库）、单进程、systemd 托管，与二进制完全解耦。详见 [panel/README.md](./panel/README.md)。
+
+不想装面板？安装时回答 `n` 即可，之后用 `v3bx panel install` 补装。
+
+### 面板相关的命令
+
+```bash
+v3bx panel          # 面板地址、账号、端口
+v3bx panel start    # 启动
+v3bx panel stop     # 停止
+v3bx panel restart  # 重启
+v3bx panel log      # 日志
+v3bx panel port     # 改端口（自动查占用，起不来自动回滚）
+v3bx panel passwd   # 重置密码
+v3bx panel uninstall# 卸载
+```
+
+菜单里也有入口：`v3bx` → **17**，主菜单底部会直接显示面板状态和端口，不用翻 `/etc/v2bx-panel/panel.env`：
+
+```
+面板状态: 已运行  端口 18080  http://1.2.3.4:18080/
+```
+
+> 密码只在首次安装时明文写在 `/etc/v2bx-panel/INITIAL_PASSWORD.txt`。在面板里改过密码后那个文件就过期了，菜单会显示「已修改，无法查看」，用 `v3bx panel passwd` 重置即可。
 
 ## 断流修复
 

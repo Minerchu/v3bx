@@ -138,6 +138,69 @@ check_status() {
     fi
 }
 
+install_panel() {
+    echo ""
+    echo -e "${green}———————— Web 管理面板 ————————${plain}"
+    echo "装好之后，对接面板、加节点、申请证书都在浏览器里做，不用再敲命令。"
+    echo ""
+    if [[ -t 0 ]]; then
+        read -rp "是否安装 Web 管理面板？(Y/n): " if_panel
+    fi
+    if [[ $if_panel == [Nn] ]]; then
+        mkdir -p /etc/v2bx-panel && touch /etc/v2bx-panel/.skipped
+        echo -e "${yellow}已跳过。之后可以用 v3bx panel install 补装${plain}"
+        return 0
+    fi
+
+    local p_port p_user p_pass
+    if [[ -t 0 ]]; then
+        read -rp "面板端口 [18080]: " p_port
+        read -rp "面板用户名 [admin]: " p_user
+    fi
+    p_port=${p_port:-18080}
+    p_user=${p_user:-admin}
+
+    while :; do
+        if [[ -t 0 ]]; then
+            read -rsp "面板密码（至少 8 位，留空随机生成）: " p_pass
+            echo
+        fi
+        if [[ -z "$p_pass" ]]; then
+            p_pass=$(head -c 64 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 16)
+            echo -e "  已生成密码：${green}${p_pass}${plain}"
+            break
+        fi
+        [[ ${#p_pass} -ge 8 ]] && break
+        echo -e "${yellow}  密码至少 8 位，重新输入${plain}"
+        p_pass=""
+    done
+
+    echo -e "${green}正在下载面板…${plain}"
+    local tmp rc
+    tmp=$(mktemp -d)
+    for f in panel.py ui.html install.sh; do
+        if ! curl -fsSL -o "${tmp}/${f}" "${SCRIPT_URL}/panel/${f}"; then
+            echo -e "${red}下载 ${f} 失败，稍后可用 v3bx panel install 重试${plain}"
+            rm -rf "$tmp"
+            return 1
+        fi
+    done
+
+    ( cd "$tmp" && PANEL_PORT="$p_port" PANEL_USER="$p_user" PANEL_PASSWORD="$p_pass" bash install.sh )
+    rc=$?
+    rm -rf "$tmp"
+
+    if [[ $rc -ne 0 ]]; then
+        echo -e "${red}面板安装失败，稍后可用 v3bx panel install 重试${plain}"
+        return 1
+    fi
+
+    echo ""
+    echo -e "${green}下一步：浏览器打开上面的地址，填面板地址和 API Key，点「保存并重启」即可完成对接。${plain}"
+    echo -e "之后所有操作（加节点、证书、看日志）都在网页里完成。"
+    echo ""
+}
+
 install_V2bX() {
     # 备份旧二进制，出问题可回滚（放在独立目录，避免随安装目录一起被清掉）
     if [[ -f /usr/local/V2bX/V2bX ]]; then
@@ -226,7 +289,7 @@ depend() {
 EOF
         chmod +x /etc/init.d/V2bX
         rc-update add V2bX default
-        echo -e "${green}V2bX ${last_version}${plain} 安装完成，已设置开机自启"
+        echo -e "${green}v3bx ${last_version}${plain} 安装完成，已设置开机自启"
     else
         rm /etc/systemd/system/V2bX.service -f
         cat <<EOF > /etc/systemd/system/V2bX.service
@@ -254,13 +317,13 @@ EOF
         systemctl daemon-reload
         systemctl stop V2bX
         systemctl enable V2bX
-        echo -e "${green}V2bX ${last_version}${plain} 安装完成，已设置开机自启"
+        echo -e "${green}v3bx ${last_version}${plain} 安装完成，已设置开机自启"
     fi
 
     if [[ ! -f /etc/V2bX/config.json ]]; then
         cp config.json /etc/V2bX/
         echo -e ""
-        echo -e "全新安装，请先参看教程：https://v2bx.v-50.me/，配置必要的内容"
+        echo -e "全新安装：配置文件已就位，接下来装 Web 面板，在浏览器里完成对接"
         first_install=true
     else
         if [[ x"${release}" == x"alpine" ]]; then
@@ -292,36 +355,34 @@ EOF
         ln -s /usr/bin/V2bX /usr/bin/v2bx
         chmod +x /usr/bin/v2bx
     fi
+    if [ ! -L /usr/bin/v3bx ]; then
+        ln -s /usr/bin/V2bX /usr/bin/v3bx
+        chmod +x /usr/bin/v3bx
+    fi
     cd $cur_dir
     rm -f install.sh
     echo -e ""
-    echo "V2bX 管理脚本使用方法 (兼容使用V2bX执行，大小写不敏感): "
+    echo "v3bx 管理脚本使用方法（V2bX / v3bx / v2bx 三个命令等价，大小写不敏感）: "
     echo "------------------------------------------"
-    echo "V2bX              - 显示管理菜单 (功能更多)"
-    echo "V2bX start        - 启动 V2bX"
-    echo "V2bX stop         - 停止 V2bX"
-    echo "V2bX restart      - 重启 V2bX"
-    echo "V2bX status       - 查看 V2bX 状态"
-    echo "V2bX enable       - 设置 V2bX 开机自启"
-    echo "V2bX disable      - 取消 V2bX 开机自启"
-    echo "V2bX log          - 查看 V2bX 日志"
-    echo "V2bX x25519       - 生成 x25519 密钥"
-    echo "V2bX generate     - 生成 V2bX 配置文件"
-    echo "V2bX update       - 更新 V2bX"
-    echo "V2bX update x.x.x - 更新 V2bX 指定版本"
-    echo "V2bX install      - 安装 V2bX"
-    echo "V2bX uninstall    - 卸载 V2bX"
-    echo "V2bX version      - 查看 V2bX 版本"
+    echo "v3bx              - 显示管理菜单 (功能更多)"
+    echo "v3bx panel        - 面板信息（地址/账号/端口）"
+    echo "v3bx start        - 启动 v3bx"
+    echo "v3bx stop         - 停止 v3bx"
+    echo "v3bx restart      - 重启 v3bx"
+    echo "v3bx status       - 查看 v3bx 状态"
+    echo "v3bx enable       - 设置开机自启"
+    echo "v3bx disable      - 取消开机自启"
+    echo "v3bx log          - 查看日志"
+    echo "v3bx x25519       - 生成 x25519 密钥"
+    echo "v3bx update       - 更新到最新版"
+    echo "v3bx update x.x.x - 更新到指定版本"
+    echo "v3bx install      - 重装"
+    echo "v3bx uninstall    - 卸载"
+    echo "v3bx version      - 查看版本"
     echo "------------------------------------------"
-    # 首次安装询问是否生成配置文件
-    if [[ $first_install == true ]]; then
-        read -rp "检测到你为第一次安装V2bX,是否自动直接生成配置文件？(y/n): " if_generate
-        if [[ $if_generate == [Yy] ]]; then
-            curl -o ./initconfig.sh -Ls ${SCRIPT_URL}/initconfig.sh
-            source initconfig.sh
-            rm initconfig.sh -f
-            generate_config_file
-        fi
+    # 面板没装就装一个（首装和升级都适用）；明确跳过的写标记，之后不再打扰
+    if [[ ! -f /opt/v2bx-panel/panel.py && ! -f /etc/v2bx-panel/.skipped ]]; then
+        install_panel
     fi
 }
 

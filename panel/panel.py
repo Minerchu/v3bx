@@ -16,6 +16,7 @@ V2bX / sing-box 节点管理面板
 
 import os
 import re
+import ssl
 import sys
 import json
 import time
@@ -26,11 +27,13 @@ import secrets
 import hashlib
 import threading
 import subprocess
+import urllib.error
+import urllib.request
 import concurrent.futures
 from pathlib import Path
 from datetime import datetime
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urlencode
 
 # ============================================================
 # 配置
@@ -304,20 +307,29 @@ def singbox_supports(proto: str) -> bool:
 
 def svc_active(name):
     code, out = run(['systemctl', 'is-active', name], timeout=5)
-    return out.strip()
+    first = (out or '').strip().splitlines()
+    val = first[0].strip() if first else ''
+    # 没 systemd 的环境下 systemctl 会把整段错误打进 stderr，这里只认已知状态词
+    for word in ('active', 'inactive', 'failed', 'activating', 'deactivating'):
+        if val.startswith(word):
+            return word
+    return 'unknown'
 
 def svc_status(name):
     active = svc_active(name)
-    enabled = run(['systemctl', 'is-enabled', name], timeout=5)[1].strip()
+    en = run(['systemctl', 'is-enabled', name], timeout=5)[1].strip().splitlines()
+    enabled = en[0].strip() if en and en[0].strip() in (
+        'enabled', 'disabled', 'static', 'masked', 'indirect') else 'unknown'
     code, out = run(['systemctl', 'show', name, '-p', 'ActiveEnterTimestamp', '-p', 'NRestarts'], timeout=5)
     info = {}
     for line in out.splitlines():
         if '=' in line:
             k, v = line.split('=', 1)
             info[k] = v
+    since = info.get('ActiveEnterTimestamp', '').strip()
     return {'name': name, 'active': active, 'enabled': enabled,
-            'since': info.get('ActiveEnterTimestamp', '').strip(),
-            'restarts': info.get('NRestarts', '0').strip()}
+            'since': since[:19],
+            'restarts': (info.get('NRestarts', '0').strip() or '0')[:8]}
 
 def svc_restart(name):
     return run(['systemctl', 'restart', name], timeout=40)
@@ -1070,6 +1082,181 @@ class Store:
         return out
 
 # ============================================================
+# 对接 Xboard / V2board
+# ============================================================
+
+PROBE_PATH = '/api/v1/server/UniProxy/config'
+
+
+def _tls_ctx():
+    """面板常部署在自签证书后面，这里不校验证书链，只做传输加密"""
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+def http_get_json(url, timeout=12):
+    req = urllib.request.Request(
+        url, headers={'Accept': 'application/json',
+                      'User-Agent': 'v3bx-panel/1.0'},
+        method='GET')
+    try:
+        with urllib.request.urlopen(req, timeout=timeout, context=_tls_ctx()) as r:
+            return r.status, r.read().decode('utf-8', 'replace')
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode('utf-8', 'replace')
+    except Exception as e:
+        return 0, str(e)
+
+
+def normalize_host(h):
+    h = (h or '').strip().rstrip('/')
+    if h and not h.startswith(('http://', 'https://')):
+        h = 'https://' + h
+    return h
+
+
+def probe_node(host, key, node_id, node_type):
+    """
+    拿 host + key + node 三元组去问一次 Xboard，验证是否真的能下发配置。
+    返回 (ok, msg, detail)
+    """
+    host = normalize_host(host)
+    if not host:
+        return False, '面板地址没填', {}
+    if not key or key == MASK:
+        return False, 'API Key 没填（已保存过的密钥不会回显，请重新输入）', {}
+    try:
+        nid = int(node_id)
+    except Exception:
+        return False, '节点 ID 必须是数字', {}
+
+    # Xboard / V2board 的节点配置接口是 GET，参数走 query：node_type / node_id / token
+    qs = urlencode({'node_type': node_type, 'node_id': nid, 'token': key})
+    code, body = http_get_json(f'{host}{PROBE_PATH}?{qs}')
+
+    if code == 0:
+        return False, f'连不上 {host}：{body[:140]}', {}
+
+    try:
+        d = json.loads(body)
+    except Exception:
+        d = None
+
+    if code == 200 and isinstance(d, dict) and 'server_port' in d:
+        name = d.get('server_name') or ''
+        port = d.get('server_port')
+        detail = {
+            'serverName': name,
+            'serverPort': port,
+            'protocol': (d.get('protocol') or node_type),
+            'tls': d.get('tls'),
+        }
+        return True, f'通：{name}:{port}' if name else f'通：端口 {port}', detail
+
+    msg = ''
+    if isinstance(d, dict):
+        msg = d.get('message') or d.get('error') or d.get('msg') or ''
+    if not msg:
+        msg = (body or '').strip()[:160]
+    hint = {
+        401: 'API Key 不对',
+        403: 'API Key 不对，或该节点未分配给这个 Key',
+        404: '接口不存在，确认地址是 Xboard 面板根地址',
+        422: '节点 ID 或类型不被接受',
+        500: '面板端报错，检查面板日志',
+    }.get(code, '')
+    return False, f'HTTP {code}：{msg or hint}', {'httpCode': code}
+
+
+def read_connect():
+    """从 /etc/V2bX/config.json 读当前对接状态"""
+    try:
+        cfg = json.loads(V2BX_CONFIG.read_text())
+    except FileNotFoundError:
+        return {
+            'apiHost': '', 'apiKey': '', 'hasKey': False, 'core': 'sing',
+            'configExists': False, 'nodes': [],
+            'service': svc_status(V2BX_SERVICE), 'path': str(V2BX_CONFIG),
+        }
+    except Exception as e:
+        return {'error': f'config.json 解析失败：{e}', 'configExists': True,
+                'path': str(V2BX_CONFIG)}
+
+    core = 'sing'
+    for c in cfg.get('Cores') or []:
+        if c.get('Type') in ('xray', 'sing'):
+            core = c['Type']
+            break
+
+    host, has_key = '', False
+    for nd in cfg.get('Nodes') or []:
+        if nd.get('ApiHost'):
+            host = nd['ApiHost']
+            has_key = bool(nd.get('ApiKey'))
+            break
+
+    return {
+        'apiHost': host,
+        'apiKey': MASK if has_key else '',
+        'hasKey': has_key,
+        'core': core,
+        'configExists': True,
+        'path': str(V2BX_CONFIG),
+        'service': svc_status(V2BX_SERVICE),
+        'nodes': [{'nodeId': nd.get('NodeID', 0),
+                   'nodeType': nd.get('NodeType', 'vless'),
+                   'core': nd.get('Core', core)} for nd in cfg.get('Nodes') or []],
+    }
+
+
+def saved_api_key():
+    """从原始 config.json 里取真实 ApiKey（store 层返回的是掩码）"""
+    try:
+        cfg = json.loads(V2BX_CONFIG.read_text())
+    except Exception:
+        return ''
+    for nd in cfg.get('Nodes') or []:
+        if nd.get('ApiKey'):
+            return nd['ApiKey']
+    return ''
+
+
+def merge_connect_nodes(old_nodes, items, core):
+    """
+    把对接页提交的 [{nodeId, nodeType}] 合并进现有节点模型。
+    已有的节点保留证书、监听等全部参数，只改 NodeType；新增的给默认值。
+    """
+    by_id = {}
+    for n in old_nodes:
+        if n.get('owner') == 'v2bx':
+            by_id[int(n.get('nodeId') or 0)] = n
+
+    out = [n for n in old_nodes if n.get('owner') != 'v2bx']
+    seen = set()
+    for it in items:
+        try:
+            nid = int(it.get('nodeId') or 0)
+        except Exception:
+            continue
+        if nid <= 0 or nid in seen:
+            continue
+        seen.add(nid)
+        nt = it.get('nodeType') or 'vless'
+        if nid in by_id:
+            n = json.loads(json.dumps(by_id[nid]))
+            n['nodeType'] = nt
+            n['core'] = core
+        else:
+            n = blank_node('v2bx', nt)
+            n['nodeId'] = nid
+            n['core'] = core
+        out.append(n)
+    return out
+
+
+# ============================================================
 # 证书
 # ============================================================
 
@@ -1279,6 +1466,9 @@ class Handler(BaseHTTPRequestHandler):
         if p == '/api/backups':
             return self._json({'backups': list_backups()})
 
+        if p == '/api/connect':
+            return self._json(read_connect())
+
         if p == '/api/config/raw':
             q = parse_qs(urlparse(self.path).query)
             svc = (q.get('service') or ['v2bx'])[0]
@@ -1360,6 +1550,44 @@ class Handler(BaseHTTPRequestHandler):
                            b.get('provider', 'cloudflare'), b.get('dnsEnv') or {},
                            b.get('email', ''), b.get('outDir', '/etc/V2bX'))
             return self._json(r)
+
+        if p == '/api/connect/test':
+            b = self._body() or {}
+            key = b.get('apiKey', '') or ''
+            # 输入框留空（密钥不回显）时，用配置里已保存的那把
+            if not key or key == MASK:
+                key = saved_api_key()
+            ok, msg, detail = probe_node(
+                b.get('apiHost', ''), key,
+                b.get('nodeId', 0), b.get('nodeType', 'vless'))
+            return self._json({'ok': ok, 'msg': msg, 'detail': detail})
+
+        if p == '/api/connect/save':
+            b = self._body() or {}
+            host = normalize_host(b.get('apiHost', ''))
+            key = b.get('apiKey', '') or ''
+            core = b.get('core') or 'sing'
+            items = b.get('nodes') or []
+
+            if not host:
+                return self._err('面板地址不能为空')
+            if not items:
+                return self._err('至少要有一个节点 ID')
+            if core not in ('xray', 'sing'):
+                return self._err(f'不支持的内核：{core}')
+
+            nodes, g = store.load_all()
+            # 密钥留空或回显掩码时，沿用配置里已有的
+            if not key or key == MASK:
+                key = saved_api_key()
+                if not key:
+                    return self._err('API Key 不能为空')
+
+            merged = merge_connect_nodes(nodes, items, core)
+            g2 = dict(g)
+            g2.update({'apiHost': host, 'apiKey': key, 'core': core})
+            res = store.apply(merged, g2, 'v2bx')
+            return self._json(res)
 
         if p == '/api/rollback':
             b = self._body() or {}

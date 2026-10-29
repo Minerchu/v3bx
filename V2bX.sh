@@ -131,7 +131,7 @@ config() {
     check_status
     case $? in
         0)
-            echo -e "V2bX状态: ${green}已运行${plain}"
+            echo -e "v3bx 状态: ${green}已运行${plain}"
             ;;
         1)
             echo -e "检测到您未启动V2bX或V2bX自动重启失败，是否查看日志？[Y/n]" && echo
@@ -142,7 +142,7 @@ config() {
             fi
             ;;
         2)
-            echo -e "V2bX状态: ${red}未安装${plain}"
+            echo -e "v3bx 状态: ${red}未安装${plain}"
     esac
 }
 
@@ -383,15 +383,15 @@ show_status() {
     check_status
     case $? in
         0)
-            echo -e "V2bX状态: ${green}已运行${plain}"
+            echo -e "v3bx 状态: ${green}已运行${plain}"
             show_enable_status
             ;;
         1)
-            echo -e "V2bX状态: ${yellow}未运行${plain}"
+            echo -e "v3bx 状态: ${yellow}未运行${plain}"
             show_enable_status
             ;;
         2)
-            echo -e "V2bX状态: ${red}未安装${plain}"
+            echo -e "v3bx 状态: ${red}未安装${plain}"
     esac
     show_panel_status
 }
@@ -1222,32 +1222,32 @@ show_usage() {
 
 show_menu() {
     echo -e "
-  ${green}V2bX 后端管理脚本，${plain}${red}不适用于docker${plain}
+  ${green}v3bx 后端管理脚本，${plain}${red}不适用于docker${plain}
 --- https://github.com/Minerchu/v3bx ---
-  ${green}本版已原生支持 shadowsocks + shadow-tls v3${plain}
+  ${green}修断流 · 带 Web 面板 · 原生 shadow-tls v3${plain}
   ${green}0.${plain} 修改配置
 ————————————————
-  ${green}1.${plain} 安装 V2bX
-  ${green}2.${plain} 更新 V2bX
-  ${green}3.${plain} 卸载 V2bX
+  ${green}1.${plain} 安装 v3bx
+  ${green}2.${plain} 更新 v3bx
+  ${green}3.${plain} 卸载 v3bx
 ————————————————
-  ${green}4.${plain} 启动 V2bX
-  ${green}5.${plain} 停止 V2bX
-  ${green}6.${plain} 重启 V2bX
-  ${green}7.${plain} 查看 V2bX 状态
-  ${green}8.${plain} 查看 V2bX 日志
+  ${green}4.${plain} 启动 v3bx
+  ${green}5.${plain} 停止 v3bx
+  ${green}6.${plain} 重启 v3bx
+  ${green}7.${plain} 查看 v3bx 状态
+  ${green}8.${plain} 查看 v3bx 日志
 ————————————————
-  ${green}9.${plain} 设置 V2bX 开机自启
-  ${green}10.${plain} 取消 V2bX 开机自启
+  ${green}9.${plain} 设置 v3bx 开机自启
+  ${green}10.${plain} 取消 v3bx 开机自启
 ————————————————
   ${green}11.${plain} 一键安装 bbr (最新内核)
-  ${green}12.${plain} 查看 V2bX 版本
+  ${green}12.${plain} 查看 v3bx 版本
   ${green}13.${plain} 生成 X25519 密钥
-  ${green}14.${plain} 升级 V2bX 维护脚本
-  ${green}15.${plain} 生成 V2bX 配置文件
+  ${green}14.${plain} 升级 v3bx 维护脚本
+  ${green}15.${plain} 生成配置文件（命令行向导）
   ${green}16.${plain} 放行 VPS 的所有网络端口
 ————————————————
-  ${green}17.${plain} 节点管理面板（端口/账号/日志）
+  ${green}17.${plain} 节点管理面板（对接/节点/日志）
   ${green}18.${plain} 退出脚本
  "
  #后续更新可加入上方字符串中

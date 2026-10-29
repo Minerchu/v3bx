@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>节点面板</title>
+<title>v3bx 节点面板</title>
 <style>
 :root{
   --bg:#0d1117; --bg2:#151b23; --bg3:#1c242e; --line:#26303c;
@@ -209,7 +209,7 @@ pre.log .g{color:var(--ok)}
 <div id="login">
   <div class="login-box">
     <h1>节点管理面板</h1>
-    <div class="sub">V2bX / sing-box 配置管理</div>
+    <div class="sub">v3bx 节点管理面板 · 对接、节点、证书全在网页里</div>
     <div class="f"><label>用户名</label><input id="lgUser" value="admin" autocomplete="username"></div>
     <div class="f"><label>密码</label><input id="lgPass" type="password" autocomplete="current-password" placeholder="首次密码见 /etc/v2bx-panel/INITIAL_PASSWORD.txt"></div>
     <button class="btn pri block" id="lgBtn">登 录</button>
@@ -220,8 +220,9 @@ pre.log .g{color:var(--ok)}
 <!-- ========== 主界面 ========== -->
 <div id="app" hidden>
   <header>
-    <div class="brand"><span class="dot"></span>节点面板</div>
+    <div class="brand"><span class="dot"></span>v3bx</div>
     <nav>
+      <button data-view="connect">对接</button>
       <button data-view="nodes" class="on">节点</button>
       <button data-view="logs">日志</button>
       <button data-view="backup">备份</button>
@@ -233,6 +234,53 @@ pre.log .g{color:var(--ok)}
   </header>
 
   <main>
+    <!-- 对接 -->
+    <section class="view" id="v-connect">
+      <div class="bar">
+        <h2>对接面板</h2>
+        <button class="btn sm" id="btnConnTest">测试连接</button>
+        <button class="btn pri sm" id="btnConnSave">保存并重启</button>
+      </div>
+
+      <div style="background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:14px 16px;margin-bottom:16px">
+        <div class="grid2">
+          <div class="f" style="margin:0">
+            <label>面板地址 <span class="req">*</span></label>
+            <input id="cnHost" placeholder="https://panel.example.com" autocomplete="off" spellcheck="false">
+            <div class="hint">Xboard 面板根地址，不带 /api</div>
+          </div>
+          <div class="f" style="margin:0">
+            <label>API Key <span class="req">*</span></label>
+            <input id="cnKey" type="password" placeholder="节点通讯密钥" autocomplete="new-password">
+            <div class="hint" id="cnKeyHint">面板「系统设置 → 节点通讯密钥」</div>
+          </div>
+        </div>
+        <div class="grid2" style="margin-top:12px">
+          <div class="f" style="margin:0">
+            <label>内核</label>
+            <select id="cnCore">
+              <option value="sing">sing（推荐，协议支持最全）</option>
+              <option value="xray">xray</option>
+            </select>
+          </div>
+          <div class="f" style="margin:0">
+            <label>服务状态</label>
+            <div id="cnSvc" style="font-family:var(--mono);font-size:12.5px;padding-top:8px">—</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bar" style="margin-top:22px">
+        <h2>节点 <span class="cnt" id="cnCnt">0</span></h2>
+        <button class="btn sm" id="btnConnAdd">+ 添加节点</button>
+      </div>
+      <div class="hint" style="margin:-10px 0 12px;font-size:12px;color:var(--dim2);line-height:1.6">
+        ID 对应面板「节点管理」列表里的 ID。端口、密码、协议参数全部由面板下发，这里只声明这台机器跑哪几个节点。
+      </div>
+      <div id="cnList"></div>
+      <div id="cnResult" style="margin-top:14px"></div>
+    </section>
+
     <!-- 节点 -->
     <section class="view on" id="v-nodes">
       <div class="bar">
@@ -252,7 +300,7 @@ pre.log .g{color:var(--ok)}
             <input data-g="apiKey" type="password" placeholder="面板通讯密钥">
           </div>
           <div class="f" style="margin:0">
-            <label>V2bX 内核</label>
+            <label>v3bx 内核</label>
             <select data-g="core">
               <option value="sing">sing（推荐，支持协议多）</option>
               <option value="xray">xray</option>
@@ -283,7 +331,7 @@ pre.log .g{color:var(--ok)}
       <div class="bar">
         <h2>服务日志</h2>
         <select id="logSvc" style="width:auto;min-width:150px">
-          <option value="v2bx">V2bX</option>
+          <option value="v2bx">v3bx</option>
           <option value="singbox">sing-box</option>
         </select>
         <select id="logLines" style="width:auto;min-width:110px">
@@ -367,7 +415,7 @@ pre.log .g{color:var(--ok)}
     </div>
     <div class="modal-body">
       <div class="tabs" id="pvTabs">
-        <button data-svc="v2bx" class="on">V2bX config.json</button>
+        <button data-svc="v2bx" class="on">v3bx 配置</button>
         <button data-svc="singbox">sing-box config.json</button>
       </div>
       <pre class="log" id="pvBox" style="max-height:520px"></pre>
@@ -458,6 +506,12 @@ async function boot() {
   $('#app').hidden = false;
   await refresh();
   renderEnv();
+
+  // 还没对接过面板的话，直接落到「对接」页
+  const c = await loadConnect();
+  if (c && (!c.apiHost || !c.hasKey || !(c.nodes || []).length)) {
+    switchView('connect');
+  }
 }
 
 /* ================= 数据 ================= */
@@ -477,7 +531,7 @@ function renderServices(sv) {
     const cls = on ? 'on' : 'bad';
     return '<span><i class="' + cls + '"></i>' + esc(label) + '</span>';
   };
-  $('#svcBar').innerHTML = mk('V2bX', sv.v2bx) + mk('sing-box', sv.singbox);
+  $('#svcBar').innerHTML = mk('v3bx', sv.v2bx) + mk('sing-box', sv.singbox);
 }
 
 function renderGlobal() {
@@ -529,7 +583,7 @@ function renderNodes() {
         '<div class="node-title">' + esc(PROTO_LABEL(n.nodeType)) +
           '<small>' + esc(portTxt) + '</small></div>' +
         '<span class="pill">' + esc(n.nodeType) + '</span>' +
-        '<span class="pill own' + (isSb ? ' sb' : '') + '">' + (isSb ? 'sing-box' : 'V2bX') + '</span>' +
+        '<span class="pill own' + (isSb ? ' sb' : '') + '">' + (isSb ? 'sing-box' : 'v3bx') + '</span>' +
         '<span class="pill">' + esc(n.core || '—') + '</span>' +
         '<span class="pill tls domain">' + esc(tlsTxt) + '</span>' +
         '<div class="node-act">' +
@@ -645,10 +699,10 @@ function renderForm() {
   H.push('<div class="grid2">');
   H.push('<div class="f"><label>承载进程 <span class="req">*</span></label>' +
     '<select data-f="owner">' +
-      '<option value="v2bx"' + (n.owner==='v2bx'?' selected':'') + '>V2bX（面板下发参数）</option>' +
+      '<option value="v2bx"' + (n.owner==='v2bx'?' selected':'') + '>v3bx（面板下发参数）</option>' +
       '<option value="singbox"' + (isSb?' selected':'') + '>sing-box（本地完整配置）</option>' +
     '</select>' +
-    '<div class="hint">V2bX 只管「跑哪个 NodeID」，端口密码由面板下发；sing-box 需要在这里填完整参数</div></div>');
+    '<div class="hint">v3bx 只管「跑哪个 NodeID」，端口密码由面板下发；sing-box 需要在这里填完整参数</div></div>');
 
   H.push('<div class="f"><label>协议 <span class="req">*</span></label>' +
     '<select data-f="nodeType">' +
@@ -1078,9 +1132,9 @@ async function doRollback(name) {
 function renderEnv() {
   if (!S.meta) return;
   $('#envInfo').innerHTML =
-    '<dt>V2bX 配置</dt><dd>' + esc(S.meta.paths.v2bx) + '</dd>' +
+    '<dt>v3bx 配置</dt><dd>' + esc(S.meta.paths.v2bx) + '</dd>' +
     '<dt>sing-box 配置</dt><dd>' + esc(S.meta.paths.singbox) + '</dd>' +
-    '<dt>V2bX 版本</dt><dd>' + esc(S.meta.caps.v2bx_version || '未检测') + '</dd>' +
+    '<dt>v3bx 版本</dt><dd>' + esc(S.meta.caps.v2bx_version || '未检测') + '</dd>' +
     '<dt>sing-box 版本</dt><dd>' + esc(S.meta.caps.singbox_version || '未检测') + '</dd>';
 }
 
@@ -1098,20 +1152,180 @@ async function loadPreview(svc) {
   } catch (e) { $('#pvBox').textContent = e.message; }
 }
 
+/* ================= 对接 ================= */
+let CONN = {nodes: []};
+
+function protoOptions(cur) {
+  const ps = (S.meta && S.meta.protocols) || {};
+  const keys = Object.keys(ps);
+  if (!keys.length) return '<option value="vless">VLESS</option>';
+  return keys.map(k => '<option value="' + k + '"' + (k === cur ? ' selected' : '') + '>' +
+    esc(ps[k].label || k) + '</option>').join('');
+}
+
+async function loadConnect() {
+  try {
+    const d = await api('/api/connect');
+    if (d.error) toast(d.error, 'err');
+    $('#cnHost').value = d.apiHost || '';
+    $('#cnKey').value = '';
+    $('#cnKey').placeholder = d.hasKey ? '已保存，留空表示不修改' : '节点通讯密钥';
+    $('#cnKeyHint').textContent = d.hasKey
+      ? '已保存过密钥，留空沿用旧值'
+      : '面板「系统设置 → 节点通讯密钥」';
+    $('#cnCore').value = d.core || 'sing';
+    CONN.nodes = (d.nodes || []).map(n => ({nodeId: n.nodeId, nodeType: n.nodeType}));
+    renderConnNodes();
+
+    const s = d.service || {};
+    const LABEL = {active:'运行中', inactive:'未运行', failed:'启动失败',
+                   activating:'启动中', deactivating:'停止中', unknown:'未检测'};
+    const on = s.active === 'active';
+    $('#cnSvc').innerHTML =
+      '<span style="color:' + (on ? 'var(--ok)' : 'var(--err)') + '">● ' +
+      esc(LABEL[s.active] || s.active || '未知') + '</span>' +
+      (s.since ? ' <span style="color:var(--dim2);font-size:11px">自 ' + esc(s.since) + '</span>' : '');
+    return d;
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+function renderConnNodes() {
+  const box = $('#cnList');
+  $('#cnCnt').textContent = CONN.nodes.length;
+  if (!CONN.nodes.length) {
+    box.innerHTML = '<div class="empty"><div class="big">还没声明节点</div>' +
+      '<div>点右上角「+ 添加节点」，填面板里那个节点的 ID</div></div>';
+    return;
+  }
+  box.innerHTML = CONN.nodes.map((n, i) =>
+    '<div class="node" style="margin-bottom:10px">' +
+      '<div class="node-head">' +
+        '<span class="node-title" data-cntitle="' + i + '">节点 ' + esc(n.nodeId || '—') + '</span>' +
+        '<span class="pill own">v3bx</span>' +
+        '<div class="node-act"><button class="icon-btn del" data-cndel="' + i + '" title="移除"></button></div>' +
+      '</div>' +
+      '<div class="grid2" style="margin-top:12px">' +
+        '<div class="f" style="margin:0"><label>节点 ID</label>' +
+          '<input type="number" min="1" data-cnid="' + i + '" value="' + esc(n.nodeId || '') + '" placeholder="例如 51"></div>' +
+        '<div class="f" style="margin:0"><label>协议类型</label>' +
+          '<select data-cntype="' + i + '">' + protoOptions(n.nodeType) + '</select></div>' +
+      '</div>' +
+    '</div>'
+  ).join('');
+}
+
+async function testConn() {
+  const host = $('#cnHost').value.trim();
+  const key = $('#cnKey').value.trim();
+  const first = CONN.nodes[0];
+  if (!host) { toast('先填面板地址', 'err'); return; }
+  if (!first || !Number(first.nodeId)) { toast('先加一个节点 ID 再测', 'err'); return; }
+  const btn = $('#btnConnTest');
+  btn.disabled = true; btn.textContent = '测试中…';
+  $('#cnResult').innerHTML = '';
+  try {
+    const r = await api('/api/connect/test', {method:'POST', body:{
+      apiHost: host, apiKey: key,
+      nodeId: Number(first.nodeId), nodeType: first.nodeType}});
+    $('#cnResult').innerHTML = '<div class="check ' + (r.ok ? 'ok' : 'error') + '">' +
+      '<span class="ico">' + (r.ok ? '✓' : '✕') + '</span><div>' + esc(r.msg) + '</div></div>';
+    toast(r.ok ? '连接正常' : '连接失败', r.ok ? 'ok' : 'err');
+  } catch (e) {
+    toast(e.message, 'err');
+  } finally {
+    btn.disabled = false; btn.textContent = '测试连接';
+  }
+}
+
+async function saveConn() {
+  const host = $('#cnHost').value.trim();
+  const key = $('#cnKey').value.trim();
+  const core = $('#cnCore').value;
+  if (!host) { toast('先填面板地址', 'err'); return; }
+
+  const items = CONN.nodes.filter(n => Number(n.nodeId) > 0)
+    .map(n => ({nodeId: Number(n.nodeId), nodeType: n.nodeType}));
+  if (!items.length) { toast('至少填一个节点 ID', 'err'); return; }
+
+  const ids = items.map(x => x.nodeId);
+  const dup = ids.filter((v, i) => ids.indexOf(v) !== i);
+  if (dup.length) { toast('节点 ID 重复：' + Array.from(new Set(dup)).join(', '), 'err'); return; }
+
+  const btn = $('#btnConnSave');
+  btn.disabled = true; btn.textContent = '保存中…';
+  $('#cnResult').innerHTML = '<div class="check"><span class="ico">…</span>' +
+    '<div>正在写入配置并重启，稍候…</div></div>';
+  try {
+    const r = await api('/api/connect/save', {method:'POST', body:{
+      apiHost: host, apiKey: key, core: core, nodes: items}});
+    const steps = r.steps || [];
+    const logHtml = r.logs ? '<pre class="log" style="max-height:300px">' + colorLog(r.logs) + '</pre>' : '';
+    if (r.ok) {
+      showResult('对接已生效', steps, logHtml, r.errors || []);
+      toast('已保存，v3bx 已重启', 'ok');
+      await refresh();
+      await loadConnect();
+    } else {
+      showResult(r.rolled_back ? '保存失败 — 已自动回滚' : '保存失败 — 配置未改动',
+                 steps, logHtml, r.errors || []);
+      const certErr = (r.errors || []).some(e => String(e.field || '').indexOf('cert') === 0);
+      if (certErr) {
+        toast('有节点还没配证书，1 秒后跳到「节点」页', 'err');
+        setTimeout(() => switchView('nodes'), 1200);
+      } else {
+        toast(r.rolled_back ? '启动失败，已回滚' : '保存失败', 'err');
+      }
+    }
+  } catch (e) {
+    toast(e.message, 'err');
+  } finally {
+    btn.disabled = false; btn.textContent = '保存并重启';
+    $('#cnResult').innerHTML = '';
+  }
+}
+
+function switchView(name) {
+  $$('nav button').forEach(x => x.classList.toggle('on', x.dataset.view === name));
+  $$('.view').forEach(v => v.classList.toggle('on', v.id === 'v-' + name));
+  if (name === 'logs') loadLog();
+  if (name === 'backup') loadBackups();
+  if (name === 'connect') loadConnect();
+}
+
 /* ================= 事件绑定 ================= */
 function bind() {
   $('#lgBtn').addEventListener('click', login);
   $('#lgPass').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
   $('#btnLogout').addEventListener('click', () => logout(true));
 
-  $$('nav button').forEach(b => b.addEventListener('click', () => {
-    $$('nav button').forEach(x => x.classList.remove('on'));
-    b.classList.add('on');
-    $$('.view').forEach(v => v.classList.remove('on'));
-    $('#v-' + b.dataset.view).classList.add('on');
-    if (b.dataset.view === 'logs') loadLog();
-    if (b.dataset.view === 'backup') loadBackups();
-  }));
+  $$('nav button').forEach(b => b.addEventListener('click', () => switchView(b.dataset.view)));
+
+  // 对接页
+  $('#btnConnTest').addEventListener('click', testConn);
+  $('#btnConnSave').addEventListener('click', saveConn);
+  $('#btnConnAdd').addEventListener('click', () => {
+    const last = CONN.nodes[CONN.nodes.length - 1];
+    CONN.nodes.push({nodeId: '', nodeType: (last && last.nodeType) || 'vless'});
+    renderConnNodes();
+  });
+  $('#cnList').addEventListener('input', e => {
+    const el = e.target.closest('[data-cnid]');
+    if (!el) return;
+    const i = Number(el.dataset.cnid);
+    CONN.nodes[i].nodeId = el.value.replace(/\D/g, '');
+    const t = document.querySelector('[data-cntitle="' + i + '"]');
+    if (t) t.textContent = '节点 ' + (CONN.nodes[i].nodeId || '—');
+  });
+  $('#cnList').addEventListener('change', e => {
+    const el = e.target.closest('[data-cntype]');
+    if (el) CONN.nodes[Number(el.dataset.cntype)].nodeType = el.value;
+  });
+  $('#cnList').addEventListener('click', e => {
+    const del = e.target.closest('[data-cndel]');
+    if (!del) return;
+    CONN.nodes.splice(Number(del.dataset.cndel), 1);
+    renderConnNodes();
+  });
 
   $('#btnAdd').addEventListener('click', () => openNode(null));
   $('#btnApply').addEventListener('click', doApply);

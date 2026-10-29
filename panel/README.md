@@ -33,6 +33,16 @@
 
 ## 安装
 
+**推荐：直接跑主安装脚本，面板会一起装上。**
+
+```bash
+wget -N https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh && bash install.sh
+```
+
+脚本会问面板端口（默认 18080）、用户名、密码，装完把访问地址打给你。之后所有操作都在浏览器里，不用再 SSH。
+
+单独装面板也可以：
+
 ```bash
 git clone --depth 1 https://github.com/Minerchu/v3bx.git
 cd v3bx/panel
@@ -57,6 +67,16 @@ PANEL_PORT=18080 PANEL_USER=admin PANEL_PASSWORD='你的密码' bash install.sh
 ---
 
 ## 它做了什么
+
+### 对接面板也在网页里
+
+第一个页签就是「对接」：填 Xboard 地址和 API Key，列出这台机器要跑哪几个节点 ID，点「保存并重启」就接上了。
+
+「测试连接」会真的拿这组参数去问一次 Xboard 的 `/api/v1/server/UniProxy/config`，返回的端口和协议直接显示出来 —— 密钥填错、节点没分配、地址写错，当场就能看出来，不用等日志。
+
+![对接页](docs/screenshots/05-connect.png)
+
+端口、密码、协议参数仍然由 Xboard 下发，这里只声明「跑哪几个 NodeID」。证书、监听这些节点级细节在「节点」页。
 
 ### 1. 一条一条加节点，字段自动适配
 
