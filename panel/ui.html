@@ -192,6 +192,10 @@ pre.log .g{color:var(--ok)}
 .tip{font-size:12px;color:var(--dim);background:#12181f;border:1px solid var(--line);
   border-radius:7px;padding:10px 13px;line-height:1.65;margin-bottom:14px}
 .tip b{color:var(--txt)}
+.warnbox{font-size:12.5px;color:#e8c46a;background:#241d10;border:1px solid #6b5320;
+  border-radius:7px;padding:10px 13px;line-height:1.7;margin-bottom:14px}
+.warnbox b{color:#ffd97a}
+.warnbox code{background:#3a2e14;color:#ffd97a;padding:1px 5px;border-radius:4px}
 @media(max-width:720px){
   header{padding:0 12px;gap:10px}
   nav button{padding:6px 9px;font-size:12px}
@@ -915,9 +919,11 @@ function renderForm() {
           (c.mode === 'self' ? ' readonly' : '') + '></div>' +
       '</div>');
       if (c.mode === 'self') {
-        H.push('<div class="tip">自签证书由面板生成（EC P-256，含 SAN，10 年）。' +
-          '客户端需要 <code>insecure</code> / <code>allowInsecure</code> 才能连，' +
-          '或者改用 DNS-01 签真证书。</div>');
+        H.push('<div class="warnbox">⚠ <b>自签证书 = 客户端必须跳过证书验证</b><br>' +
+          '面板会自己签一张证书（EC P-256，含 SAN，10 年），但它不是受信任的 CA 签发的。' +
+          '<b>客户端不开 <code>insecure</code> / <code>allowInsecure</code> 一定连不上</b>' +
+          '（握手被拒，服务端只回几十字节就断）。<br>' +
+          '想免配置直接连 → 证书方式改选 <b>「DNS 验证」</b>，填 Cloudflare 凭据签一张真实证书（推荐）。</div>');
       }
       H.push('<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">' +
         '<button class="btn sm" id="btnIssue">' + (c.mode === 'self' ? '生成自签证书' : '检查证书文件') + '</button>' +
@@ -1340,9 +1346,13 @@ function showResult(title, steps, html, errs) {
       '<span>' + esc(s.name) + '</span>' +
       (s.detail ? '<span class="d">' + esc(s.detail) + '</span>' : '') +
     '</div>').join('') + '</div>';
-  const errHtml = (errs || []).filter(e => e.level === 'error').map(e =>
-    '<div class="check error"><span class="ico">✕</span><div>' +
-    (e.field ? '<code>' + esc(e.field) + '</code> ' : '') + e.msg + '</div></div>').join('');
+  const errHtml = (errs || []).filter(e => e.level === 'error' || e.level === 'warn')
+    .sort((a, b) => (a.level === 'error' ? 0 : 1) - (b.level === 'error' ? 0 : 1))
+    .map(e => {
+      const w = e.level === 'warn';
+      return '<div class="check ' + (w ? 'warn' : 'error') + '"><span class="ico">' + (w ? '!' : '✕') + '</span><div>' +
+        (e.field ? '<code>' + esc(e.field) + '</code> ' : '') + e.msg + '</div></div>';
+    }).join('');
   $('#resultBody').innerHTML = stepHtml + errHtml + (html || '');
   $('#mResult').classList.add('on');
 }
