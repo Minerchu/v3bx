@@ -927,7 +927,11 @@ function renderForm() {
         '<div class="f"><label>邮箱（acme 注册用）</label><input data-f="certEmail" value="' + esc(c.email) + '" placeholder="you@example.com"></div>');
       if (c.mode === 'dns') {
         H.push('<div class="f"><label>DNS 服务商</label><select data-f="certProvider">' +
-          S.meta.providers.map(p => '<option value="' + p + '"' + (c.provider===p?' selected':'') + '>' + p + '</option>').join('') +
+          S.meta.providers.map(p => {
+            const pf = (S.meta.providerFields || {})[p] || {};
+            const lbl = pf.label || p;
+            return '<option value="' + p + '"' + (c.provider===p?' selected':'') + '>' + esc(lbl) + '</option>';
+          }).join('') +
         '</select></div>');
       }
       H.push('</div>');
@@ -936,7 +940,7 @@ function renderForm() {
         const hasPool = !!(((S.meta.creds || {})[c.provider]) || {});
         H.push('<div class="tip">' +
           (hasPool
-            ? '已从凭据池继承 <b>' + esc(c.provider) + '</b> 的凭据（显示为掩码），无需重复填写。'
+            ? '已从凭据池继承 <b>' + esc(pf.label || c.provider) + '</b> 的凭据（显示为掩码），无需重复填写。'
             : '申请证书需要 <b>' + esc(pf.label || c.provider) + '</b> 的 API 凭据，填一次后会自动记入凭据池，后续新节点直接复用。') +
           '这些值会写进 config.json 的 <code>DNSEnv</code>，V2bX 启动时也会用它续期。</div>');
         (pf.groups || []).forEach(gr => {
