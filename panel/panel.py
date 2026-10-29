@@ -625,7 +625,7 @@ def _sing_origin_skeleton(ds):
     }
 
 
-def ensure_sing_origin(v6):
+def ensure_sing_origin(v6, nodes=None):
     """V2bX 的 sing 内核会读 OriginalPath，文件不存在就直接启动失败
     （core/sing/sing.go:55 `read original config error`）。
     安装脚本以前 cp 的是 example/sing_origin.json，而仓库里根本没这个文件，
@@ -639,11 +639,11 @@ def ensure_sing_origin(v6):
         except Exception:
             cfg = None
 
+    created = False
     if not isinstance(cfg, dict) or not cfg:
-        # 文件缺失 / 内容坏了：直接给一份完整骨架，别指望往空 dict 里补字段
-        SING_ORIGIN.parent.mkdir(parents=True, exist_ok=True)
-        SING_ORIGIN.write_text(json.dumps(_sing_origin_skeleton(ds), indent=2, ensure_ascii=False))
-        return True
+        # 文件缺失 / 内容坏了：先给一份完整骨架，再往下走（要给 nodes 追加 socks 出站）
+        cfg = _sing_origin_skeleton(ds)
+        created = True
 
     changed = False
     obs = cfg.get('outbounds')
@@ -666,10 +666,70 @@ def ensure_sing_origin(v6):
                 s['strategy'] = ds
                 changed = True
 
-    if changed:
+    # ---- 每节点 socks5 出口：写入 sing-box 的 outbound + route 规则 ----
+    if nodes is not None:
+        if not isinstance(cfg.get('outbounds'), list):
+            cfg['outbounds'] = _sing_origin_skeleton(ds)['outbounds']
+        route = cfg.get('route')
+        if not isinstance(route, dict):
+            route = cfg['route'] = {}
+        if not isinstance(route.get('rules'), list):
+            route['rules'] = []
+        # 清掉上一轮面板托管的出站/规则（tag 前缀 ob-node-），保证可重复执行
+        cfg['outbounds'] = [o for o in cfg['outbounds']
+                            if not (isinstance(o, dict) and str(o.get('tag', '')).startswith('ob-node-'))]
+        route['rules'] = [r for r in route['rules']
+                          if not (isinstance(r, dict) and str(r.get('outbound', '')).startswith('ob-node-'))]
+        # 私有地址拦截必须留在最前面：节点出口是 socks 时也不能放内网流量出去
+        head, rest = [], []
+        for r in route['rules']:
+            if isinstance(r, dict) and r.get('ip_is_private') and not r.get('inbound'):
+                head.append(r)
+            else:
+                rest.append(r)
+        new_rules = []
+        for n in nodes:
+            if n.get('owner') != 'v2bx' or n.get('core') != 'sing':
+                continue
+            oc = n.get('outbound') or {}
+            if oc.get('type') != 'socks5':
+                continue
+            s5 = oc.get('socks5') or {}
+            server = (s5.get('server') or '').strip()
+            if not server:
+                continue
+            try:
+                nid = int(n.get('nodeId') or 0)
+                port = int(s5.get('port') or 1080)
+            except Exception:
+                continue
+            if nid <= 0 or port < 1 or port > 65535:
+                continue
+            in_tag = f'node-{nid}'
+            ob_tag = f'ob-node-{nid}'
+            ob = {'type': 'socks', 'tag': ob_tag, 'server': server,
+                  'server_port': port, 'version': '5'}
+            if s5.get('username'):
+                ob['username'] = s5.get('username')
+            if s5.get('password'):
+                ob['password'] = s5.get('password')
+            cfg['outbounds'].append(ob)
+            new_rules.append({'inbound': [in_tag], 'outbound': ob_tag})
+        route['rules'] = head + new_rules + rest
+
+    # 幂等：内容真变了才写盘、才报「有改动」
+    text = json.dumps(cfg, indent=2, ensure_ascii=False)
+    old_text = None
+    if existed:
+        try:
+            old_text = SING_ORIGIN.read_text()
+        except Exception:
+            old_text = None
+    if created or text != old_text:
         SING_ORIGIN.parent.mkdir(parents=True, exist_ok=True)
-        SING_ORIGIN.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
-    return changed
+        SING_ORIGIN.write_text(text)
+        return True
+    return False
 
 # ============================================================
 # DNS 凭据池
@@ -779,6 +839,10 @@ def blank_node(owner='v2bx', node_type='vless'):
             'provider': 'cloudflare',
             'dnsEnv': {},
         },
+        'outbound': {
+            'type': 'direct',
+            'socks5': {'server': '', 'port': 1080, 'username': '', 'password': ''},
+        },
         'remark': '',
         # sing-box 专用
         'transport': 'ws',
@@ -833,6 +897,17 @@ def parse_v2bx_nodes(cfg):
             'email': cc.get('Email', ''),
             'provider': cc.get('Provider', 'cloudflare'),
             'dnsEnv': dict(cc.get('DNSEnv') or {}),
+        }
+        oc = nd.get('OutboundConfig') or {}
+        s5 = oc.get('Socks5') or {}
+        n['outbound'] = {
+            'type': (oc.get('Type') or 'direct').lower(),
+            'socks5': {
+                'server': s5.get('Server', '') or '',
+                'port': int(s5.get('Port') or 1080),
+                'username': s5.get('Username', '') or '',
+                'password': s5.get('Password', '') or '',
+            },
         }
         n['remark'] = cc.get('CertDomain', '') or f'Node {n["nodeId"]}'
         nodes.append(n)
@@ -935,6 +1010,25 @@ def render_v2bx_node(n, g, ipv6=True):
             'Provider': c.get('provider', 'cloudflare'),
             'DNSEnv': c.get('dnsEnv') or {},
         }
+    # 每节点出口：本地直连 or socks5
+    oc = n.get('outbound') or {}
+    if oc.get('type') == 'socks5' and (oc.get('socks5') or {}).get('server'):
+        s5 = oc.get('socks5') or {}
+        o['OutboundConfig'] = {
+            'Type': 'socks5',
+            'Socks5': {
+                'Server': s5.get('server', ''),
+                'Port': int(s5.get('port') or 1080),
+                'Username': s5.get('username', '') or '',
+                'Password': s5.get('password', '') or '',
+            },
+        }
+    else:
+        o['OutboundConfig'] = {'Type': 'direct'}
+    try:
+        o['Name'] = f'node-{int(n.get("nodeId") or 0)}'
+    except Exception:
+        pass
     return o
 
 def render_singbox_inbounds(n, ipv6=True):
@@ -1218,6 +1312,22 @@ def validate_node(n, all_nodes, g):
         if n.get('transport') == 'ws' and not n.get('path'):
             out.append({'level': 'error', 'field': 'path', 'msg': 'WS 传输必须填 path'})
 
+    # 出口
+    oc = n.get('outbound') or {}
+    if oc.get('type') == 'socks5':
+        s5 = oc.get('socks5') or {}
+        if not (s5.get('server') or '').strip():
+            out.append({'level': 'error', 'field': 'outbound.socks5.server',
+                        'msg': '出口选了 SOCKS5，必须填服务器地址'})
+        try:
+            p = int(s5.get('port') or 0)
+            if p < 1 or p > 65535:
+                out.append({'level': 'error', 'field': 'outbound.socks5.port',
+                            'msg': 'SOCKS5 端口非法（1-65535）'})
+        except Exception:
+            out.append({'level': 'error', 'field': 'outbound.socks5.port',
+                        'msg': 'SOCKS5 端口必须是数字'})
+
     return out
 
 def validate_global(nodes, g):
@@ -1451,7 +1561,7 @@ class Store:
             if target in ('all', 'v2bx') and g.get('core', 'sing') == 'sing':
                 if SING_ORIGIN.exists():
                     backup_file(SING_ORIGIN, 'singorigin')
-                changed = ensure_sing_origin(v6)
+                changed = ensure_sing_origin(v6, nodes)
                 steps.append({'name': 'sing 内核模板', 'ok': True,
                               'detail': ('出站域名策略 → ' + ('prefer_ipv4（双栈）' if v6 else 'ipv4_only（本机无 IPv6）'))
                                         if changed else '无需改动'})
