@@ -278,7 +278,9 @@ pre.log .g{color:var(--ok)}
            border-radius:7px;background:rgba(210,153,34,.1);
            border:1px solid rgba(210,153,34,.35);color:var(--warn);font-size:12.5px"></div>
       <div class="hint" style="margin:-10px 0 12px;font-size:12px;color:var(--dim2);line-height:1.6">
-        ID 对应面板「节点管理」列表里的 ID。端口、密码、协议参数全部由面板下发，这里只声明这台机器跑哪几个节点。
+        ID 对应面板「节点管理」列表里的 ID。端口、密码、协议参数全部由面板下发，这里只声明这台机器跑哪几个节点。<br>
+        点「保存并重启」时会先逐个探测：探测通了就把面板下发的 SNI 自动填进节点域名，并顺手补一张自签证书，
+        所以新机器不用再回「节点」页手动配一遍。
       </div>
       <div id="cnList"></div>
       <div id="cnResult" style="margin-top:14px"></div>
@@ -291,6 +293,9 @@ pre.log .g{color:var(--ok)}
         <button class="btn sm" id="btnPreview">查看配置</button>
         <button class="btn pri sm" id="btnAdd">+ 添加节点</button>
       </div>
+
+      <div id="portBar" style="margin-bottom:12px;font-family:var(--mono);font-size:12px;
+           color:var(--dim);line-height:1.9"></div>
 
       <div id="globalBox" style="background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:14px 16px;margin-bottom:16px">
         <div class="grid3">
@@ -523,9 +528,25 @@ async function refresh() {
   S.nodes = st.nodes || [];
   S.global = Object.assign({apiHost:'', apiKey:'', logLevel:'error', core:'sing'}, st.global || {});
   renderServices(st.services);
+  renderPorts(st.ports);
   renderGlobal();
   renderNodes();
   validate();
+}
+
+/* 实际在监听的端口。面板说「保存成功」是一回事，内核真的把端口打开了
+   是另一回事——把 ss 的结果直接摆出来，省得去 SSH 里查。 */
+function renderPorts(list) {
+  const box = $('#portBar');
+  if (!box) return;
+  if (!list || !list.length) {
+    box.innerHTML = '<span style="color:var(--err)">● 没有检测到监听端口</span>';
+    return;
+  }
+  box.innerHTML = '<span style="color:var(--ok)">● 正在监听</span> ' +
+    list.map(p => '<span style="color:var(--dim2)">' + esc(p.proto) + '</span> ' +
+      '<b style="color:var(--txt)">' + p.port + '</b>' +
+      '<span style="color:var(--dim2)"> ' + esc(p.proc) + '</span>').join('<span style="color:var(--line)"> │ </span>');
 }
 
 function renderServices(sv) {
@@ -709,10 +730,17 @@ function renderForm() {
 
   H.push('<div class="f"><label>协议 <span class="req">*</span></label>' +
     '<select data-f="nodeType">' +
-      Object.keys(S.meta.protocols).map(k =>
-        '<option value="' + k + '"' + (n.nodeType===k?' selected':'') + '>' +
-        esc(S.meta.protocols[k].label) + ' (' + k + ')</option>').join('') +
-    '</select></div>');
+      Object.keys(S.meta.protocols).map(k => {
+        const p = S.meta.protocols[k];
+        // V2bX 的 NodeType 有白名单（api/panel/panel.go:59），socks/http
+        // 写进去会让服务无限重启，这里直接禁掉，别让用户选了再报错
+        const bad = n.owner === 'v2bx' && p.v2bx === false;
+        return '<option value="' + k + '"' + (n.nodeType===k?' selected':'') + (bad?' disabled':'') + '>' +
+          esc(p.label) + ' (' + k + ')' + (bad ? ' — 仅 sing-box' : '') + '</option>';
+      }).join('') +
+    '</select>' +
+    (n.owner === 'v2bx' ? '<div class="hint">V2bX 只认 vless / vmess / trojan / shadowsocks / hysteria / hysteria2 / tuic / anytls</div>' : '') +
+    '</div>');
   H.push('</div>');
 
   H.push('<div class="grid2">');
@@ -753,9 +781,10 @@ function renderForm() {
     if (['vless','vmess','trojan'].includes(n.nodeType)) {
       extra += '<div class="grid2">' +
         '<div class="f"><label>传输方式</label><select data-f="transport">' +
-          ['ws','grpc','tcp','http'].map(t => '<option value="' + t + '"' + (n.transport===t?' selected':'') + '>' + t + '</option>').join('') +
+          ['tcp','ws','grpc','httpupgrade'].map(t => '<option value="' + t + '"' + (n.transport===t?' selected':'') + '>' + t + '</option>').join('') +
         '</select></div>' +
-        '<div class="f"><label>WS Path</label><input data-f="path" value="' + esc(n.path) + '"></div>' +
+        '<div class="f"><label>' + (n.transport === 'grpc' ? 'Service Name' : 'WS Path') + '</label>' +
+          '<input data-f="path" value="' + esc(n.path) + '"></div>' +
       '</div>';
     }
     if (n.nodeType === 'shadowsocks') {
@@ -814,18 +843,29 @@ function renderForm() {
         return '<option value="' + m + '"' + (c.mode===m?' selected':'') + '>' + esc(S.meta.certModes[m]) + '</option>';
       }).join('') + '</select></div>');
     H.push('<div class="f"><label>域名 / SNI' + (c.mode!=='none'?' <span class="req">*</span>':'') + '</label>' +
-      '<input data-f="certDomain" value="' + esc(c.domain) + '" placeholder="node.example.com"></div>');
+      '<input data-f="certDomain" value="' + esc(c.domain) + '" placeholder="node.example.com">' +
+      '<div class="hint">必须和 Xboard 里该节点的 SNI 一致。留空的话，对接页保存时会自动从面板探测回来。</div></div>');
     H.push('</div>');
 
     if (c.mode === 'file' || c.mode === 'self') {
       H.push('<div class="grid2">' +
-        '<div class="f"><label>证书路径</label><input data-f="certFile" value="' + esc(c.certFile) + '"></div>' +
-        '<div class="f"><label>私钥路径</label><input data-f="keyFile" value="' + esc(c.keyFile) + '"></div>' +
+        '<div class="f"><label>证书路径</label><input data-f="certFile" value="' + esc(c.certFile) + '"' +
+          (c.mode === 'self' ? ' readonly' : '') + '></div>' +
+        '<div class="f"><label>私钥路径</label><input data-f="keyFile" value="' + esc(c.keyFile) + '"' +
+          (c.mode === 'self' ? ' readonly' : '') + '></div>' +
       '</div>');
+      if (c.mode === 'self') {
+        H.push('<div class="tip">自签证书由面板生成（EC P-256，含 SAN，10 年）。' +
+          '客户端需要 <code>insecure</code> / <code>allowInsecure</code> 才能连，' +
+          '或者改用 DNS-01 签真证书。</div>');
+      }
+      H.push('<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">' +
+        '<button class="btn sm" id="btnIssue">' + (c.mode === 'self' ? '生成自签证书' : '检查证书文件') + '</button>' +
+        '<span id="certStat" style="font-size:12px;color:var(--dim)">读取中…</span></div>');
     }
     if (c.mode === 'dns' || c.mode === 'http') {
       H.push('<div class="grid2">' +
-        '<div class="f"><label>邮箱（acme 注册用）</label><input data-f="certEmail" value="' + esc(c.email) + '"></div>');
+        '<div class="f"><label>邮箱（acme 注册用）</label><input data-f="certEmail" value="' + esc(c.email) + '" placeholder="you@example.com"></div>');
       if (c.mode === 'dns') {
         H.push('<div class="f"><label>DNS 服务商</label><select data-f="certProvider">' +
           S.meta.providers.map(p => '<option value="' + p + '"' + (c.provider===p?' selected':'') + '>' + p + '</option>').join('') +
@@ -839,7 +879,7 @@ function renderForm() {
           (hasPool
             ? '已从凭据池继承 <b>' + esc(c.provider) + '</b> 的凭据（显示为掩码），无需重复填写。'
             : '申请证书需要 <b>' + esc(c.provider) + '</b> 的 API 凭据，填一次后会自动记入凭据池，后续新节点直接复用。') +
-          '这些值会写进 config.json 的 <code>DNSEnv</code>。</div>');
+          '这些值会写进 config.json 的 <code>DNSEnv</code>，V2bX 启动时也会用它续期。</div>');
         H.push('<div class="grid2">');
         need.forEach(k => {
           const v = (c.dnsEnv && c.dnsEnv[k]) || '';
@@ -847,9 +887,12 @@ function renderForm() {
             (v ? '••••••••' : '') + '" placeholder="' + esc(k) + '"></div>');
         });
         H.push('</div>');
-        H.push('<button class="btn sm" id="btnIssue" style="margin-bottom:12px">立即申请证书</button>' +
-               '<span id="issueMsg" style="font-size:12px;color:var(--dim);margin-left:10px"></span>');
       }
+      H.push('<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">' +
+        '<button class="btn sm" id="btnIssue">立即申请证书</button>' +
+        '<span id="certStat" style="font-size:12px;color:var(--dim)">读取中…</span></div>');
+      H.push('<div class="tip">不点这个也行：证书文件不存在时，V2bX 启动会用内置 lego ' +
+        '按上面的 Provider + DNSEnv 自动申请，点「部署」一样能签下来。</div>');
     }
     H.push('</fieldset>');
   } else {
@@ -860,7 +903,30 @@ function renderForm() {
 
   $('#nodeForm').innerHTML = H.join('');
   bindForm();
+  refreshCertStat();
   validateForm();
+}
+
+/* 证书状态：文件在不在、还剩几天、CN 对不对 */
+function refreshCertStat() {
+  const box = $('#certStat');
+  if (!box) return;
+  const c = (S.editing && S.editing.cert) || {};
+  if (!c.certFile) { box.textContent = '还没有证书路径'; return; }
+  api('/api/cert/status?path=' + encodeURIComponent(c.certFile) +
+      '&domain=' + encodeURIComponent(c.domain || ''))
+    .then(d => {
+      const LBL = {ok:'有效', expiring:'快过期', expired:'已过期', missing:'文件不存在',
+                   mismatch:'域名不匹配', invalid:'无法解析'};
+      const col = d.state === 'ok' ? 'var(--ok)'
+                : d.state === 'expiring' ? 'var(--warn)' : 'var(--err)';
+      let s = '<span style="color:' + col + '">● ' + esc(LBL[d.state] || d.state) + '</span>';
+      if (d.notAfter) s += ' <span style="color:var(--dim2)">到期 ' + esc(d.notAfter) +
+        (d.days != null ? '（' + d.days + ' 天）' : '') + '</span>';
+      if (d.cn) s += ' <span style="color:var(--dim2)">CN=' + esc(d.cn) + '</span>';
+      box.innerHTML = s;
+    })
+    .catch(() => { box.textContent = '状态读取失败'; });
 }
 
 /* 表单内实时校验：只显示当前节点自己的问题 */
@@ -932,6 +998,7 @@ function onField(e) {
     return;
   }
   if (k === 'core') { n.core = v; return; }
+  if (k === 'transport') { n.transport = v; renderForm(); return; }
   if (k === 'certMode') {
     n.cert.mode = v;
     renderForm();
@@ -947,6 +1014,17 @@ function onField(e) {
   if (k.startsWith('cert')) {
     const map = {certDomain:'domain', certFile:'certFile', keyFile:'keyFile', certEmail:'email'};
     n.cert[map[k]] = v;
+    if (k === 'certDomain' && n.cert.mode === 'self') {
+      // 自签路径跟着域名走，和后端 normalize_cert 保持一致。
+      // 这里只改两个只读框的值，不重绘，否则输入框会失焦。
+      const d = v.trim();
+      n.cert.certFile = d ? '/etc/V2bX/cert/' + d + '.crt' : '';
+      n.cert.keyFile  = d ? '/etc/V2bX/cert/' + d + '.key' : '';
+      const cf = document.querySelector('#nodeForm [data-f="certFile"]');
+      const kf = document.querySelector('#nodeForm [data-f="keyFile"]');
+      if (cf) cf.value = n.cert.certFile;
+      if (kf) kf.value = n.cert.keyFile;
+    }
     return;
   }
   if (el.dataset.env) {
@@ -985,31 +1063,53 @@ async function doIssue() {
   const n = S.editing;
   const c = n.cert;
   if (!c.domain) { toast('请先填域名', 'err'); return; }
+  // 「文件」方式面板只负责检查，不会去签发
+  if (c.mode === 'file') { refreshCertStat(); toast('已刷新证书状态', 'ok'); return; }
   const btn = $('#btnIssue');
+  const isSelf = c.mode === 'self';
+  const isFile = c.mode === 'file';
   btn.disabled = true;
-  $('#issueMsg').textContent = '申请中，最长 3 分钟…';
+  const label = $('#certStat');
+  if (label) label.textContent = isSelf ? '生成中…' : '申请中，最长 4 分钟…';
+
+  // 掩码绝不能当真凭据发给后端，否则 acme.sh 会拿 "••••••••" 去调 DNS API。
+  // 这里把掩码整个丢掉，后端会自动回落到凭据池里的真值。
+  const env = {};
+  Object.keys(c.dnsEnv || {}).forEach(k => {
+    const v = c.dnsEnv[k];
+    if (v && v !== '••••••••' && v !== '__KEEP__') env[k] = v;
+  });
+
   try {
     const r = await api('/api/cert/issue', {
       method: 'POST',
       body: {domain: c.domain, mode: c.mode, provider: c.provider,
-             dnsEnv: c.dnsEnv || {}, email: c.email, outDir: '/etc/V2bX'},
+             dnsEnv: env, email: c.email, outDir: ''},
     });
     if (r.ok) {
-      $('#issueMsg').innerHTML = '<span style="color:var(--ok)">签发成功</span> ' + esc(r.certFile);
-      c.certFile = r.certFile;
-      c.keyFile = r.keyFile;
-      c.mode = 'file';
+      if (r.certFile) c.certFile = r.certFile;
+      if (r.keyFile) c.keyFile = r.keyFile;
+      if (r.mode) c.mode = r.mode;
       renderForm();
-      toast('证书签发成功，已切到「文件」方式', 'ok');
+      toast(isSelf ? '自签证书已生成' : '证书签发成功', 'ok');
+    } else if (r.delegated) {
+      // 没装 acme.sh —— 不是错误，V2bX 启动时会自己签
+      showResult('交给 V2bX 自动申请', [
+        {name: 'acme.sh', ok: false, detail: '未安装'},
+        {name: 'V2bX 内置 lego', ok: true, detail: '部署时自动申请'},
+      ], '<pre class="log">' + esc(r.log || '') + '</pre>', []);
+      toast('没装 acme.sh，点「部署」由 V2bX 自己签', 'ok');
     } else {
-      $('#issueMsg').innerHTML = '<span style="color:var(--err)">失败</span>';
-      showResult('证书申请失败', [{name:'acme.sh', ok:false, detail:'失败'}],
+      showResult(isSelf ? '生成自签证书失败' : '证书申请失败',
+                 [{name: isSelf ? 'openssl' : 'acme.sh', ok: false, detail: '失败'}],
                  '<pre class="log">' + esc(r.log || '无输出') + '</pre>', []);
+      toast(isSelf ? '生成失败' : '申请失败', 'err');
     }
   } catch (e) {
-    $('#issueMsg').innerHTML = '<span style="color:var(--err)">' + esc(e.message) + '</span>';
+    toast(e.message, 'err');
   } finally {
     btn.disabled = false;
+    refreshCertStat();
   }
 }
 
@@ -1160,7 +1260,9 @@ let CONN = {nodes: []};
 
 function protoOptions(cur) {
   const ps = (S.meta && S.meta.protocols) || {};
-  const keys = Object.keys(ps);
+  // 对接页的节点都由 V2bX 承载，只列它的白名单内的协议；
+  // socks / http 写进 config.json 会让 V2bX 直接起不来。
+  const keys = Object.keys(ps).filter(k => ps[k].v2bx !== false);
   if (!keys.length) return '<option value="vless">VLESS</option>';
   return keys.map(k => '<option value="' + k + '"' + (k === cur ? ' selected' : '') + '>' +
     esc(ps[k].label || k) + '</option>').join('');
@@ -1276,7 +1378,22 @@ async function saveConn() {
     const steps = r.steps || [];
     const logHtml = r.logs ? '<pre class="log" style="max-height:300px">' + colorLog(r.logs) + '</pre>' : '';
     if (r.ok) {
-      showResult('对接已生效', steps, logHtml, r.errors || []);
+      let extra = logHtml;
+      if (r.domains && Object.keys(r.domains).length) {
+        extra = '<div class="check ok" style="margin:0 0 12px"><span class="ico">✓</span><div>' +
+          '已从面板取到 SNI，自动补进节点域名：' + esc(Object.values(r.domains).join('、')) +
+          '</div></div>' + extra;
+      }
+      const bad = (r.probes || []).filter(p => !p.ok);
+      if (bad.length) {
+        extra += '<div class="check" style="margin-top:12px"><span class="ico">!</span><div>' +
+          bad.map(p => '节点 ' + esc(p.nodeId) + ' 探测未通过：' + esc(p.msg)).join('<br>') +
+          '<br>不影响本次保存，但该节点可能拿不到配置。' +
+          (bad.some(p => !(r.domains || {})[p.nodeId])
+            ? '探测失败时取不到 SNI，请到「节点」页手填域名。' : '') +
+          '</div></div>';
+      }
+      showResult('对接已生效', steps, extra, r.errors || []);
       toast('已保存，v3bx 已重启', 'ok');
       await refresh();
       await loadConnect();

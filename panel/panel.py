@@ -65,16 +65,26 @@ MASK = '__KEEP__'          # 敏感字段脱敏哨兵：前端原样回传即代
 KEEP_DAYS = 30             # 备份保留天数
 
 # 协议元数据：决定内核可选范围、是否必须 TLS
+#
+# 这份表必须和 V2bX 源码对齐，否则「面板能选、内核不认」= 服务无限重启：
+#   - api/panel/panel.go:59  NewClient 白名单只认
+#       vmess / vless / trojan / shadowsocks / hysteria / hysteria2 / tuic / anytls
+#     写 socks 或 http 会直接 "unsupported Node type"，节点建不起来。
+#   - core/xray/inbound.go:26  xray 只实现 vmess / vless / trojan / shadowsocks
+#   - core/sing/node.go:123    sing 覆盖全部 8 种
+#
+# v2bx=False 表示 V2bX 无法承载，只能给 sing-box 独立实例用。
 PROTOCOLS = {
-    'vless':       {'label': 'VLESS',       'cores': ['xray', 'sing'], 'tls': 'optional'},
-    'vmess':       {'label': 'VMess',       'cores': ['xray', 'sing'], 'tls': 'optional'},
-    'trojan':      {'label': 'Trojan',      'cores': ['xray', 'sing'], 'tls': 'required'},
-    'shadowsocks': {'label': 'Shadowsocks', 'cores': ['sing'],        'tls': 'none'},
-    'socks':       {'label': 'SOCKS5',      'cores': ['xray', 'sing'], 'tls': 'none'},
-    'http':        {'label': 'HTTP',        'cores': ['xray', 'sing'], 'tls': 'none'},
-    'hysteria2':   {'label': 'Hysteria2',   'cores': ['sing'],        'tls': 'required'},
-    'tuic':        {'label': 'TUIC',        'cores': ['sing'],        'tls': 'required'},
-    'anytls':      {'label': 'AnyTLS',      'cores': ['sing'],        'tls': 'required'},
+    'vless':       {'label': 'VLESS',        'cores': ['xray', 'sing'], 'tls': 'optional', 'v2bx': True},
+    'vmess':       {'label': 'VMess',        'cores': ['xray', 'sing'], 'tls': 'optional', 'v2bx': True},
+    'trojan':      {'label': 'Trojan',       'cores': ['xray', 'sing'], 'tls': 'required', 'v2bx': True},
+    'shadowsocks': {'label': 'Shadowsocks',  'cores': ['xray', 'sing'], 'tls': 'none',     'v2bx': True},
+    'hysteria':    {'label': 'Hysteria (v1)','cores': ['sing'],         'tls': 'required', 'v2bx': True},
+    'hysteria2':   {'label': 'Hysteria2',    'cores': ['sing'],         'tls': 'required', 'v2bx': True},
+    'tuic':        {'label': 'TUIC',         'cores': ['sing'],         'tls': 'required', 'v2bx': True},
+    'anytls':      {'label': 'AnyTLS',       'cores': ['sing'],         'tls': 'required', 'v2bx': True},
+    'socks':       {'label': 'SOCKS5',       'cores': ['sing'],         'tls': 'none',     'v2bx': False},
+    'http':        {'label': 'HTTP',         'cores': ['sing'],         'tls': 'none',     'v2bx': False},
 }
 
 CERT_MODES = {
@@ -84,6 +94,10 @@ CERT_MODES = {
     'dns':  'acme.sh DNS-01（推荐，无需 80 端口）',
     'self': '自签证书',
 }
+
+# 面板自己签发/生成证书的落地目录。和 acme.sh 的安装目录分开，
+# 便于一眼看出「哪些是面板管的」。
+CERT_DIR = Path(os.environ.get('CERT_DIR', '/etc/V2bX/cert'))
 
 DNS_PROVIDERS = ['cloudflare', 'alidns', 'dnspod', 'dns_dp', 'dns_ali', 'gcore', 'route53', 'namecheap']
 
@@ -274,34 +288,6 @@ class Auth:
         return True, ''
 
 # ============================================================
-# 能力探测（缓存）
-# ============================================================
-
-_cap_cache = {}
-
-def v2bx_supports(proto: str) -> bool:
-    """V2bX 的协议支持由内置 core 决定，无法从二进制静态判断。
-    Go 编译产物里残留的字符串会误导（实测 77MB 二进制里 grep 到 69 处 hysteria2，
-    但它并不支持 hy2 core），因此这里不做静态判定，真正的验证交给
-    部署时的启动检查 + 自动回滚。"""
-    return True
-
-def singbox_supports(proto: str) -> bool:
-    key = 'sb_' + proto
-    if key in _cap_cache:
-        return _cap_cache[key]
-    ok = False
-    if Path(SINGBOX_BIN).exists():
-        code, out = run([SINGBOX_BIN, 'version'], timeout=10)
-        if code == 0:
-            _cap_cache['sb_version'] = out.strip().split('\n')[0]
-        code, out = run(['strings', SINGBOX_BIN], timeout=20)
-        if code == 0:
-            ok = proto in out.lower()
-    _cap_cache[key] = ok
-    return ok
-
-# ============================================================
 # 服务操作
 # ============================================================
 
@@ -377,14 +363,25 @@ def wait_stable(name, settle=2.0, confirm=4.0):
     return svc_active(name) == 'active'
 
 def listen_ports():
-    """返回 {(proto, port): process}"""
+    """返回 {(proto, port): process}，只保留真正的「监听」端口。
+
+    两个坑：
+    1. 列数：Netid State Recv-Q Send-Q Local Peer Process，地址在第 5 列。
+       原来只跳 3 列，把 Send-Q 的 "0" 当成了地址，端口列表永远为空。
+    2. `ss -l` 对 UDP 也会列出「已连接」的临时 socket（peer 是具体地址），
+       这些不是监听端口，混进来会让界面显示一堆随机高位端口。
+    """
     code, out = run(['ss', '-tulnp'], timeout=10)
     res = {}
     for line in out.splitlines()[1:]:
-        m = re.search(r'(tcp|udp)\S*\s+\S+\s+\S+\s+(\S+)\s+', line)
+        m = re.search(r'^(tcp|udp)\s+(\S+)\s+\S+\s+\S+\s+(\S+)\s+(\S+)', line)
         if not m:
             continue
-        proto, addr = m.group(1), m.group(2)
+        proto, state, addr, peer = m.group(1), m.group(2), m.group(3), m.group(4)
+        if proto == 'tcp' and state != 'LISTEN':
+            continue
+        if proto == 'udp' and not peer.endswith(':*'):
+            continue          # 已连接的 UDP socket，不是监听
         pm = re.search(r':(\d+)$', addr)
         if not pm:
             continue
@@ -477,6 +474,9 @@ def list_backups(limit=40):
 
 def blank_node(owner='v2bx', node_type='vless'):
     meta = PROTOCOLS.get(node_type, PROTOCOLS['vless'])
+    # 必 TLS 的协议默认给「自签」：Xboard 那边很多节点就是自签 + 客户端
+    # insecure，选 dns 反而要先备齐 API 凭据才能保存。想要真证书，
+    # 用户改一次下拉即可，证书路径会自动跟着域名走。
     return {
         'uid': secrets.token_hex(6),
         'owner': owner,
@@ -486,10 +486,10 @@ def blank_node(owner='v2bx', node_type='vless'):
         'listenIP': '::' if owner == 'v2bx' else '0.0.0.0',
         'listenPort': 443 if owner == 'singbox' else 0,
         'cert': {
-            'mode': 'none' if meta['tls'] == 'none' else 'dns',
+            'mode': 'none' if meta['tls'] == 'none' else 'self',
             'domain': '',
-            'certFile': '/etc/V2bX/fullchain.cer',
-            'keyFile': '/etc/V2bX/cert.key',
+            'certFile': '',
+            'keyFile': '',
             'email': '',
             'provider': 'cloudflare',
             'dnsEnv': {},
@@ -693,12 +693,34 @@ def render_singbox_inbounds(n):
         ib['users'] = []
     elif t in ('vless', 'vmess', 'trojan'):
         ib['users'] = []
+        # 传输层：之前这里完全没写，UI 上选了 ws/grpc 保存后配置里啥也没有，
+        # 用户以为生效了其实还是裸 tcp。
+        tr = (n.get('transport') or 'tcp').lower()
+        if tr in ('ws', 'grpc', 'httpupgrade', 'http'):
+            path = n.get('path') or '/'
+            host = (n.get('host') or '').strip()
+            if tr == 'ws':
+                ib['transport'] = {'type': 'ws', 'path': path}
+                if host:
+                    ib['transport']['headers'] = {'Host': host}
+            elif tr == 'grpc':
+                ib['transport'] = {'type': 'grpc',
+                                   'service_name': path.strip('/') or 'grpc'}
+            else:
+                ib['transport'] = {'type': 'httpupgrade', 'path': path}
+                if host:
+                    ib['transport']['host'] = host
     elif t == 'hysteria2':
         ib['users'] = []
         if n.get('obfs'):
             ib['obfs'] = {'type': n['obfs'], 'password': n.get('obfsPassword', '')}
         if n.get('masquerade'):
             ib['masquerade'] = n['masquerade']
+        # Brutal 拥塞控制靠这两个值；不写就退化成 BBR
+        if n.get('upMbps'):
+            ib['up_mbps'] = int(n['upMbps'])
+        if n.get('downMbps'):
+            ib['down_mbps'] = int(n['downMbps'])
     elif t == 'tuic':
         ib['users'] = []
         ib['congestion_control'] = n.get('congestionControl', 'bbr')
@@ -715,11 +737,21 @@ def render_singbox_inbounds(n):
 def validate_node(n, all_nodes, g):
     """返回 [{level, field, msg}]"""
     out = []
+    normalize_cert(n)
     t = n.get('nodeType')
     meta = PROTOCOLS.get(t)
     if not meta:
         out.append({'level': 'error', 'field': 'nodeType', 'msg': f'未知协议 {t}'})
         return out
+
+    # V2bX 的 NewClient 有一层白名单（api/panel/panel.go:59），不在名单里的
+    # NodeType 会让节点建不起来、服务无限重启。socks / http 只能给独立
+    # sing-box 实例用。
+    if n.get('owner') == 'v2bx' and not meta.get('v2bx', True):
+        out.append({'level': 'error', 'field': 'nodeType',
+                    'msg': f'V2bX 不支持 <code>{t}</code> 协议。它的 NodeType 白名单只有 '
+                           f'vmess / vless / trojan / shadowsocks / hysteria / hysteria2 / tuic / anytls。'
+                           f'要用 {meta["label"]} 请把承载进程改成 sing-box'})
 
     # 内核：V2bX 的 Cores[].Type 只认 xray / sing，写别的会导致
     # "unknown core type: xxx" 然后无限重启（三个节点一起挂）
@@ -732,12 +764,6 @@ def validate_node(n, all_nodes, g):
         out.append({'level': 'error', 'field': 'core',
                     'msg': f'{meta["label"]} 不支持 <code>{core}</code> 内核，请改成 '
                            + ' / '.join(f'<code>{c}</code>' for c in meta['cores'])})
-
-    # 已知风险组合：只提醒，不阻断（部署失败会自动回滚）
-    if n.get('owner') == 'v2bx' and t in ('hysteria2', 'tuic', 'anytls'):
-        out.append({'level': 'warn', 'field': 'nodeType',
-                    'msg': f'<code>{t}</code> 需要 V2bX 内置 sing-box 支持。'
-                           f'启动失败会自动回滚；想更稳妥可改用 sing-box 独立进程承载'})
 
     # NodeID
     if n.get('owner') == 'v2bx':
@@ -796,7 +822,8 @@ def validate_node(n, all_nodes, g):
         c = n['cert']
         if not c.get('domain'):
             out.append({'level': 'error', 'field': 'cert.domain',
-                        'msg': '启用 TLS 必须填域名（用于签发证书和 SNI）'})
+                        'msg': '启用 TLS 必须填域名。自签也要填——它决定证书的 CN/SAN，'
+                               '和 Xboard 下发的 SNI 对不上客户端会握手失败'})
         if mode in ('file', 'self'):
             if not c.get('certFile') or not c.get('keyFile'):
                 out.append({'level': 'error', 'field': 'cert.certFile',
@@ -808,6 +835,20 @@ def validate_node(n, all_nodes, g):
                 if not Path(c['keyFile']).exists():
                     out.append({'level': 'warn', 'field': 'cert.keyFile',
                                 'msg': f'私钥文件 <code>{c["keyFile"]}</code> 当前不存在'})
+            else:  # self
+                info = cert_info(c.get('certFile'))
+                if info['state'] == 'missing':
+                    out.append({'level': 'info', 'field': 'cert.certFile',
+                                'msg': '自签证书还没生成，部署时面板会自动补一张'
+                                       '（也可以在节点页点「生成自签证书」立刻生成）'})
+                elif info['state'] == 'expired':
+                    out.append({'level': 'warn', 'field': 'cert.certFile',
+                                'msg': f'自签证书已过期（{info["notAfter"]}），部署时不会自动覆盖，'
+                                       f'请点「生成自签证书」重新生成'})
+                elif info['state'] == 'mismatch':
+                    out.append({'level': 'warn', 'field': 'cert.certFile',
+                                'msg': f'证书里的域名（{info["cn"]}）和当前填的 '
+                                       f'<code>{c.get("domain")}</code> 不一致，客户端会报 SNI 不匹配'})
         if mode == 'dns':
             prov = c.get('provider')
             if not prov:
@@ -1004,15 +1045,22 @@ class Store:
                 resolve_creds(n)
 
             # ---- 1. 校验 ----
+            # 只校验本次真正要写的那一侧。否则 sing-box 那边一个历史遗留的
+            # 小毛病会挡住 V2bX 的保存（反过来也一样），用户根本不知道
+            # 为什么「改的是这边，报错的却是那边」。
+            scope = [n for n in nodes
+                     if target == 'all'
+                     or (target == 'v2bx' and n.get('owner') == 'v2bx')
+                     or (target == 'singbox' and n.get('owner') == 'singbox')]
             errs = validate_global(nodes, g)
-            for n in nodes:
-                errs += validate_node(n, nodes, g)
+            for n in scope:
+                errs += validate_node(n, scope, g)
             hard = [e for e in errs if e['level'] == 'error']
             if hard:
                 steps.append({'name': '配置校验', 'ok': False, 'detail': f'{len(hard)} 个错误'})
                 return {'ok': False, 'stage': 'validate', 'errors': errs, 'steps': steps}
 
-            steps.append({'name': '配置校验', 'ok': True, 'detail': f'{len(nodes)} 个节点通过'})
+            steps.append({'name': '配置校验', 'ok': True, 'detail': f'{len(scope)} 个节点通过'})
 
             # ---- 2. 生成新配置 ----
             try:
@@ -1030,6 +1078,31 @@ class Store:
                 baks['singbox'] = backup_file(SINGBOX_CONFIG, 'singbox')
             steps.append({'name': '备份原配置', 'ok': True,
                           'detail': '、'.join(b.name for b in baks.values()) or '无原文件'})
+
+            # ---- 3.5 准备自签证书 ----
+            # 证书缺失时直接部署，V2bX 起来会因为 TLS 没证书而挂掉，然后回滚，
+            # 表现就是「保存不了」。这里在写配置之前先补齐，一次成功。
+            made = []
+            for n in scope:
+                c = n.get('cert') or {}
+                if (c.get('mode') or 'none') != 'self':
+                    continue
+                domain = (c.get('domain') or '').strip()
+                if not domain:
+                    continue
+                info = cert_info(c.get('certFile'), domain)
+                if info['state'] in ('ok', 'expiring'):
+                    continue
+                r = self_sign(domain, c.get('certFile'), c.get('keyFile'))
+                if not r.get('ok'):
+                    return {'ok': False, 'stage': 'cert', 'steps': steps + [
+                        {'name': '生成自签证书', 'ok': False, 'detail': domain}],
+                        'errors': [{'level': 'error', 'field': 'cert.certFile',
+                                    'msg': f'<code>{domain}</code> 的自签证书生成失败：'
+                                           f'<br><code>{(r.get("log") or "")[-600:]}</code>'}]}
+                made.append(f'{domain}（{info["state"]}）')
+            if made:
+                steps.append({'name': '生成自签证书', 'ok': True, 'detail': '、'.join(made)})
 
             # ---- 4. 写临时文件并做语法/语义校验 ----
             tmp_v2bx = V2BX_CONFIG.with_suffix('.json.tmp')
@@ -1189,15 +1262,31 @@ def probe_node(host, key, node_id, node_type):
         d = None
 
     if code == 200 and isinstance(d, dict) and 'server_port' in d:
-        name = d.get('server_name') or ''
+        # 域名藏在 tls_settings.server_name 里，不在顶层——只读顶层会一直拿到空串，
+        # 于是新节点永远补不上域名，保存必然卡在「必须填域名」。
+        ts = d.get('tls_settings')
+        if not isinstance(ts, dict):
+            ts = {}
+        base = d.get('base_config')
+        if isinstance(base, dict):
+            bts = base.get('tls_settings')
+            if isinstance(bts, dict):
+                for k, v in bts.items():
+                    ts.setdefault(k, v)
+        name = (d.get('server_name') or ts.get('server_name') or '').strip()
         port = d.get('server_port')
         detail = {
             'serverName': name,
             'serverPort': port,
-            'protocol': (d.get('protocol') or node_type),
+            'protocol': d.get('protocol') or node_type,
             'tls': d.get('tls'),
+            'network': d.get('network'),
+            'allowInsecure': ts.get('allow_insecure'),
         }
-        return True, f'通：{name}:{port}' if name else f'通：端口 {port}', detail
+        msg = f'通：{name}:{port}' if name else f'通：端口 {port}'
+        if d.get('tls') and not name:
+            msg += '（面板没下发 SNI，需手填域名）'
+        return True, msg, detail
 
     msg = ''
     if isinstance(d, dict):
@@ -1271,11 +1360,25 @@ def saved_api_key():
     return ''
 
 
-def merge_connect_nodes(old_nodes, items, core):
+def pick_core(node_type, prefer):
+    """按协议挑一个合法内核。用户选的优先，不合法就退到协议支持的第一个。
+
+    之前是直接 `n['core'] = 对接页选的内核`，于是「对接页选 xray + 节点是
+    hysteria2」会写出一个 V2bX 永远起不来的配置，而对接页没有改内核的入口，
+    用户只能卡在这里。
+    """
+    cores = (PROTOCOLS.get(node_type) or {}).get('cores') or ['sing']
+    return prefer if prefer in cores else cores[0]
+
+
+def merge_connect_nodes(old_nodes, items, core, domains=None):
     """
     把对接页提交的 [{nodeId, nodeType}] 合并进现有节点模型。
     已有的节点保留证书、监听等全部参数，只改 NodeType；新增的给默认值。
+
+    domains: {nodeId: server_name}，从 Xboard 探测回来的 SNI，用来补空域名。
     """
+    domains = domains or {}
     by_id = {}
     for n in old_nodes:
         if n.get('owner') == 'v2bx':
@@ -1292,14 +1395,30 @@ def merge_connect_nodes(old_nodes, items, core):
             continue
         seen.add(nid)
         nt = it.get('nodeType') or 'vless'
+        meta = PROTOCOLS.get(nt) or {}
         if nid in by_id:
             n = json.loads(json.dumps(by_id[nid]))
+            changed = n.get('nodeType') != nt
             n['nodeType'] = nt
-            n['core'] = core
+            n['core'] = pick_core(nt, core)
+            if changed:
+                c = n.setdefault('cert', {})
+                if meta.get('tls') == 'none':
+                    c['mode'] = 'none'
+                elif (c.get('mode') or 'none') == 'none':
+                    # 换成必 TLS 的协议，原来没开 TLS，先给自签顶上
+                    c['mode'] = 'self'
         else:
             n = blank_node('v2bx', nt)
             n['nodeId'] = nid
-            n['core'] = core
+            n['core'] = pick_core(nt, core)
+
+        # 探测到的 SNI 补进域名，但绝不覆盖用户已经填过的
+        dom = (domains.get(nid) or '').strip()
+        c = n.setdefault('cert', {})
+        if dom and not (c.get('domain') or '').strip():
+            c['domain'] = dom
+        normalize_cert(n)
         out.append(n)
     return out
 
@@ -1307,50 +1426,244 @@ def merge_connect_nodes(old_nodes, items, core):
 # ============================================================
 # 证书
 # ============================================================
+#
+# 三条路径，各有各的坑，这里一次说清：
+#
+# 1) self  —— 面板用 openssl 自己签。V2bX 也会签（node/cert.go 的
+#    generateSelfSslCertificate），但它只在「文件不存在」时才动手，签完
+#    没有回执，改域名也不会重签，面板这边看不到任何状态。自己签的好处：
+#    点完立刻有结果、能读有效期/SAN、域名一改路径自动跟着换。
+#    （顺手也把上游那行写错的 PEM 标签 "EC PRIVATE KEY" 修成了
+#    "RSA PRIVATE KEY"——Go 能容错，openssl/nginx 不能。）
+#
+# 2) dns/http —— 优先 acme.sh（如果装了）。注意 acme.sh 的插件名和 lego 的
+#    provider 名不是一套：lego 叫 cloudflare，acme.sh 叫 dns_cf。之前直接
+#    把 cloudflare 传给 --dns，acme.sh 找不到 dns_cloudflare 插件，必然失败。
+#    没装 acme.sh 时不报死错，而是告诉用户「保存并重启后由 V2bX 内置 lego
+#    自动申请」——V2bX 的 requestCert 在证书文件不存在时就会调 lego。
+#
+# 3) file —— 用户自己的证书，面板只校验存在性，不碰。
 
-def issue_cert(domain, mode, provider, dns_env, email, out_dir):
-    """调用 acme.sh 申请证书，返回 {ok, log, certFile, keyFile}"""
+DOMAIN_RE = re.compile(
+    r'^(?:\*\.)?(?:[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$')
+
+# lego provider -> acme.sh dns 插件
+ACME_DNS_PLUGIN = {
+    'cloudflare': 'dns_cf',
+    'alidns':     'dns_ali',
+    'dns_ali':    'dns_ali',
+    'dnspod':     'dns_dp',
+    'dns_dp':     'dns_dp',
+    'gcore':      'dns_gcore',
+    'route53':    'dns_aws',
+    'namecheap':  'dns_namecheap',
+}
+
+
+def safe_name(domain):
+    return re.sub(r'[^A-Za-z0-9.\-_]', '_', (domain or '').strip()) or 'default'
+
+
+def cert_paths(domain):
+    """面板管理的证书落地路径（按域名区分，避免多节点互相覆盖）"""
+    d = safe_name(domain)
+    return CERT_DIR / f'{d}.crt', CERT_DIR / f'{d}.key'
+
+
+def normalize_cert(n):
+    """补齐 self 模式的证书路径。就地修改，validate / render 都会先调它。"""
+    c = n.get('cert')
+    if not isinstance(c, dict):
+        c = n['cert'] = {}
+    if (c.get('mode') or 'none') != 'self':
+        return
+    domain = (c.get('domain') or '').strip()
+    if not domain:
+        return
+    crt, key = cert_paths(domain)
+    cur = c.get('certFile') or ''
+    # 只接管「面板目录下」或「空」的路径；用户自己填的绝对路径不动
+    if not cur or Path(cur).parent == CERT_DIR:
+        c['certFile'] = str(crt)
+        c['keyFile'] = str(key)
+
+
+def cert_info(path, domain=None):
+    """读证书状态：missing / ok / expiring / expired / mismatch"""
+    out = {'state': 'missing', 'notAfter': '', 'cn': '', 'days': None}
+    if not path or not Path(path).exists():
+        return out
+    code, txt = run(['openssl', 'x509', '-in', str(path), '-noout',
+                     '-enddate', '-subject'], timeout=10)
+    if code != 0:
+        out['state'] = 'invalid'
+        return out
+    m = re.search(r'notAfter=(.+)', txt)
+    if m:
+        raw = m.group(1).strip()
+        out['notAfter'] = raw
+        try:
+            # 形如 Mar  1 12:00:00 2035 GMT
+            exp = datetime.strptime(raw.replace('GMT', '').strip(), '%b %d %H:%M:%S %Y')
+            days = (exp - datetime.now()).days
+            out['days'] = days
+            out['state'] = 'expired' if days < 0 else ('expiring' if days < 14 else 'ok')
+        except Exception:
+            out['state'] = 'ok'
+    else:
+        out['state'] = 'ok'
+    ms = re.search(r'subject=.*?CN\s*=\s*([^,\n/]+)', txt)
+    if ms:
+        out['cn'] = ms.group(1).strip()
+
+    if domain and out['state'] in ('ok', 'expiring'):
+        code, san = run(['openssl', 'x509', '-in', str(path), '-noout',
+                         '-ext', 'subjectAltName'], timeout=10)
+        names = re.findall(r'DNS:([^,\s]+)', san or '')
+        want = domain.strip().lower()
+        if names:
+            hit = any(nm.lower() == want for nm in names)
+            if not hit and want.startswith('*.'):
+                hit = any(nm.lower() == want for nm in names)
+            if not hit:
+                out['state'] = 'mismatch'
+        elif out['cn'] and out['cn'].lower() != want:
+            out['state'] = 'mismatch'
+    return out
+
+
+def self_sign(domain, cert_file, key_file, days=3650):
+    """用 openssl 生成自签证书（EC P-256，带 SAN）。
+
+    走临时配置文件而不是 -addext：CentOS 7 的 openssl 1.0.2 不认 -addext，
+    写配置文件在 1.0.2 / 1.1.1 / 3.x 上都能用。
+    """
+    if not DOMAIN_RE.match(domain or ''):
+        return {'ok': False, 'log': f'域名格式不合法: {domain}'}
+    if not shutil.which('openssl'):
+        return {'ok': False, 'log': '系统没有 openssl，无法生成自签证书（apt install openssl）'}
+
+    cert_file, key_file = Path(cert_file), Path(key_file)
+    try:
+        cert_file.parent.mkdir(parents=True, exist_ok=True)
+        key_file.parent.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        return {'ok': False, 'log': f'创建目录失败: {e}'}
+
+    cnf = cert_file.parent / f'.{safe_name(domain)}.cnf'
+    cnf.write_text(
+        '[req]\n'
+        'distinguished_name = dn\n'
+        'x509_extensions = v3\n'
+        'prompt = no\n'
+        '[dn]\n'
+        f'CN = {domain}\n'
+        '[v3]\n'
+        f'subjectAltName = DNS:{domain}\n'
+        'basicConstraints = CA:FALSE\n'
+        'keyUsage = digitalSignature, keyEncipherment\n'
+        'extendedKeyUsage = serverAuth\n'
+    )
+    cmd = ['openssl', 'req', '-x509', '-nodes',
+           '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1',
+           '-keyout', str(key_file), '-out', str(cert_file),
+           '-days', str(days), '-config', str(cnf)]
+    code, log = run(cmd, timeout=60)
+    try:
+        cnf.unlink()
+    except Exception:
+        pass
+    if code != 0 or not cert_file.exists() or not key_file.exists():
+        return {'ok': False, 'log': (log or 'openssl 执行失败')[-1200:]}
+    try:
+        os.chmod(key_file, 0o600)
+        os.chmod(cert_file, 0o644)
+    except Exception:
+        pass
+    return {'ok': True, 'log': (log or '') + f'\n已生成自签证书，有效期 {days} 天',
+            'certFile': str(cert_file), 'keyFile': str(key_file), 'mode': 'self'}
+
+
+def issue_cert(domain, mode, provider, dns_env, email, out_dir, node=None):
+    """签发/生成证书。返回 {ok, log, certFile, keyFile, delegated?}"""
+    domain = (domain or '').strip()
+    if not DOMAIN_RE.match(domain):
+        return {'ok': False, 'log': f'域名格式不合法：{domain or "（空）"}。'
+                                    f'支持 example.com 和 *.example.com'}
+
+    # 凭据：前端可能传掩码，从池子里取真值
+    env_vals = {}
+    for k, v in (dns_env or {}).items():
+        if v and v not in (MASK, '••••••••'):
+            env_vals[k] = v
+    if not env_vals and provider:
+        env_vals = dict(load_creds().get(provider, {}))
+
+    if mode == 'self':
+        crt, key = cert_paths(domain)
+        if out_dir and str(out_dir) not in ('/etc/V2bX', ''):
+            crt = Path(out_dir) / f'{safe_name(domain)}.crt'
+            key = Path(out_dir) / f'{safe_name(domain)}.key'
+        return self_sign(domain, crt, key)
+
+    if mode not in ('dns', 'http'):
+        return {'ok': False, 'log': f'不支持的证书方式：{mode}'}
+
     if not Path(ACME).exists():
-        return {'ok': False, 'log': f'acme.sh 不存在: {ACME}'}
-    if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9.\-]*\.[a-zA-Z]{2,}$', domain or ''):
-        return {'ok': False, 'log': '域名格式不合法'}
+        # 不报死错：V2bX 内置 lego，证书文件不存在时启动即申请
+        return {'ok': False, 'delegated': True,
+                'log': f'这台机器没装 acme.sh（{ACME}）。\n\n'
+                       f'不用装也能签：V2bX 启动时发现证书文件不存在，会用内置 lego '
+                       f'按 CertConfig 里的 Provider + DNSEnv 自动申请。\n'
+                       f'直接点「保存并重启」，然后看日志里的 obtain certificate 即可。\n\n'
+                       f'想在这里当场看到结果的话，装一下：\n'
+                       f'  curl https://get.acme.sh | sh -s email=你的邮箱'}
+
+    plugin = ACME_DNS_PLUGIN.get(provider or '')
+    if mode == 'dns' and not plugin:
+        return {'ok': False, 'log': f'acme.sh 没有对应 <code>{provider}</code> 的 DNS 插件。'
+                                    f'可选：' + '、'.join(sorted(set(ACME_DNS_PLUGIN.values())))}
 
     env = dict(os.environ)
-    for k, v in (dns_env or {}).items():
-        if v and v != MASK:
-            env[k] = v
+    env.update(env_vals)
 
+    cmd = [ACME, '--issue', '--server', 'letsencrypt']
     if mode == 'dns':
-        cmd = [ACME, '--issue', '--dns', provider or 'dns_cf', '-d', domain,
-               '--keylength', 'ec-256', '--force']
+        cmd += ['--dns', plugin]
     else:
-        cmd = [ACME, '--issue', '-d', domain, '--keylength', 'ec-256', '--force']
+        cmd += ['--standalone']
+    cmd += ['-d', domain, '--keylength', 'ec-256']
+    if email:
+        cmd += ['--accountemail', email]
+    # 只有证书确实不存在时才加 --force，避免反复打 Let's Encrypt 的速率限制
+    crt0, _ = cert_paths(domain)
+    if not crt0.exists():
+        cmd.append('--force')
 
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=180, env=env)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=240, env=env)
         log = (r.stdout or '') + (r.stderr or '')
     except subprocess.TimeoutExpired:
-        return {'ok': False, 'log': 'acme.sh 执行超时（180s）'}
-
+        return {'ok': False, 'log': 'acme.sh 执行超时（240s）。DNS 生效慢时正常，'
+                                    '也可能是 API 凭据没权限。'}
     if r.returncode != 0:
-        return {'ok': False, 'log': log}
+        return {'ok': False, 'log': log[-4000:]}
 
-    # 安装到目标目录
-    out_dir = Path(out_dir or '/etc/V2bX')
+    out_dir = Path(out_dir or CERT_DIR)
     out_dir.mkdir(parents=True, exist_ok=True)
-    fullchain = out_dir / f'{domain}.crt'
-    keyfile = out_dir / f'{domain}.key'
+    fullchain = out_dir / f'{safe_name(domain)}.crt'
+    keyfile = out_dir / f'{safe_name(domain)}.key'
+    # 不写 --reloadcmd：申请完就重启会造成一次无谓闪断，交给「部署」统一重启
     cmd2 = [ACME, '--install-cert', '-d', domain, '--ecc',
-            '--fullchain-file', str(fullchain), '--key-file', str(keyfile),
-            '--reloadcmd', f'systemctl restart {V2BX_SERVICE} || true']
+            '--fullchain-file', str(fullchain), '--key-file', str(keyfile)]
     try:
-        r2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=60)
+        r2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=90)
         log += '\n' + (r2.stdout or '') + (r2.stderr or '')
     except subprocess.TimeoutExpired:
         return {'ok': False, 'log': log + '\n安装证书超时'}
 
-    return {'ok': fullchain.exists() and keyfile.exists(), 'log': log,
-            'certFile': str(fullchain), 'keyFile': str(keyfile)}
+    return {'ok': fullchain.exists() and keyfile.exists(), 'log': log[-4000:],
+            'certFile': str(fullchain), 'keyFile': str(keyfile), 'mode': 'file'}
 
 # ============================================================
 # HTTP 服务
@@ -1514,6 +1827,14 @@ class Handler(BaseHTTPRequestHandler):
         if p == '/api/backups':
             return self._json({'backups': list_backups()})
 
+        if p == '/api/cert/status':
+            q = parse_qs(urlparse(self.path).query)
+            path = (q.get('path') or [''])[0]
+            domain = (q.get('domain') or [''])[0]
+            if not path:
+                return self._err('缺少 path')
+            return self._json(cert_info(path, domain or None))
+
         if p == '/api/connect':
             return self._json(read_connect())
 
@@ -1594,9 +1915,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if p == '/api/cert/issue':
             b = self._body() or {}
-            r = issue_cert(b.get('domain', ''), b.get('mode', 'dns'),
+            mode = b.get('mode') or 'self'
+            r = issue_cert(b.get('domain', ''), mode,
                            b.get('provider', 'cloudflare'), b.get('dnsEnv') or {},
-                           b.get('email', ''), b.get('outDir', '/etc/V2bX'))
+                           b.get('email', ''), b.get('outDir') or '', b.get('node'))
             return self._json(r)
 
         if p == '/api/connect/test':
@@ -1631,10 +1953,26 @@ class Handler(BaseHTTPRequestHandler):
                 if not key:
                     return self._err('API Key 不能为空')
 
-            merged = merge_connect_nodes(nodes, items, core)
+            # 保存前顺手探一遍：一是提前发现 ID/类型填错，二是把 Xboard 下发的
+            # server_name 拿来补空域名——新节点没域名就没法配 TLS，而对接页
+            # 压根没有域名输入框，不补的话保存必然卡在「必须填域名」。
+            domains, probes = {}, []
+            def _probe(it):
+                ok, msg, detail = probe_node(host, key, it.get('nodeId'), it.get('nodeType'))
+                return it.get('nodeId'), ok, msg, (detail or {})
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, max(1, len(items)))) as ex:
+                for nid, ok, msg, detail in ex.map(_probe, items):
+                    probes.append({'nodeId': nid, 'ok': ok, 'msg': msg})
+                    if ok and detail.get('serverName'):
+                        domains[nid] = detail['serverName']
+
+            merged = merge_connect_nodes(nodes, items, core, domains)
             g2 = dict(g)
             g2.update({'apiHost': host, 'apiKey': key, 'core': core})
             res = store.apply(merged, g2, 'v2bx')
+            res['probes'] = probes
+            res['domains'] = domains
             return self._json(res)
 
         if p == '/api/rollback':

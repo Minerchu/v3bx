@@ -105,8 +105,13 @@ func generateSelfSslCertificate(domain, certPath, keyPath string) error {
 	if err != nil {
 		return err
 	}
+	// 标签必须是 "RSA PRIVATE KEY"：上面生成的是 rsa.PrivateKey，
+	// x509.MarshalPKCS1PrivateKey 出来的是 PKCS#1 DER。原先写的是
+	// "EC PRIVATE KEY"，Go 的 tls.LoadX509KeyPair 会靠逐个试探把 RSA
+	// 内容兜住，所以 xray / sing-box 侥幸能起来；但 openssl、nginx 这类
+	// 按标签严格解析的工具会直接拒绝。既然是 fork，就把这行写对。
 	err = pem.Encode(f, &pem.Block{
-		Type:  "EC PRIVATE KEY",
+		Type:  "RSA PRIVATE KEY",
 		Bytes: x509.MarshalPKCS1PrivateKey(key),
 	})
 	if err != nil {

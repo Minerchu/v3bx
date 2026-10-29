@@ -76,14 +76,17 @@ PANEL_PORT=18080 PANEL_USER=admin PANEL_PASSWORD='你的密码' bash install.sh
 
 ![对接页](docs/screenshots/05-connect.png)
 
+点「保存并重启」时会**先逐个探测**，探测通了就把 Xboard 下发的 SNI（藏在 `tls_settings.server_name` 里）自动填进节点域名，并按需补一张自签证书。所以新机器从零到能跑，只要在这一页填地址、密钥、NodeID，不需要再去「节点」页手配一遍证书。
+
 端口、密码、协议参数仍然由 Xboard 下发，这里只声明「跑哪几个 NodeID」。证书、监听这些节点级细节在「节点」页。
 
 ### 1. 一条一条加节点，字段自动适配
 
 选中协议后，表单会自己变：
 
+- **协议下拉**按承载进程过滤：`socks` / `http` 在 V2bX 下是灰的（它的 NodeType 白名单里没有这两个，写进去会让服务无限重启），只有切到 sing-box 才能选
 - **内核下拉框**只列出该协议支持的（`hysteria2` 只给 `sing`，选不到 `xray`）
-- **证书区块**自动显示/隐藏（`shadowsocks`/`socks`/`http` 直接跳过；`trojan`/`hy2`/`tuic` 强制必须启用 TLS）
+- **证书区块**自动显示/隐藏（`shadowsocks`/`socks`/`http` 直接跳过；`trojan`/`hy2`/`tuic`/`anytls` 强制必须启用 TLS）
 - **证书方式**选 `dns` 才出现 provider 和 API Key 输入框，选 `file` 才出现证书路径
 - **协议参数**按类型出现：hy2 给带宽/obfs/伪装站，tuic 给拥塞控制，ss 给加密方式和 shadow-tls 内层端口
 
@@ -104,15 +107,18 @@ PANEL_PORT=18080 PANEL_USER=admin PANEL_PASSWORD='你的密码' bash install.sh
 ```
 ① 校验（有 error 直接停，配置不动）
 ② 备份原配置到 /etc/v2bx-panel/backups/
-③ 写临时文件
-④ sing-box check 校验（不通过就停）
-⑤ 原子替换（os.replace，不会出现写一半的配置）
-⑥ 重启服务
-⑦ 等 2 秒看状态 → 再等 4 秒确认没二次崩溃
-⑧ 任一步失败 → 自动恢复备份 → 重启 → 把 journalctl 里的错误行提取出来给你看
+③ 补齐自签证书（缺的现签，过期的重签，已有的不动）
+④ 写临时文件
+⑤ sing-box check 校验（不通过就停）
+⑥ 原子替换（os.replace，不会出现写一半的配置）
+⑦ 重启服务
+⑧ 等 2 秒看状态 → 再等 4 秒确认没二次崩溃
+⑨ 任一步失败 → 自动恢复备份 → 重启 → 把 journalctl 里的错误行提取出来给你看
 ```
 
-第 ⑦ 步是关键：V2bX 崩溃时 `systemctl is-active` 返回的是 `activating` 而不是 `failed`，只查一次会被骗过去。所以要**两次确认**。
+第 ③ 步是为了堵住一个很常见的坑：证书文件不存在时部署，V2bX 起来会因为 TLS 没证书而挂掉，然后回滚，用户看到的就是「保存不了」。现在缺失的证书在写配置之前就补好，一次成功。
+
+第 ⑧ 步是关键：V2bX 崩溃时 `systemctl is-active` 返回的是 `activating` 而不是 `failed`，只查一次会被骗过去。所以要**两次确认**。
 
 失败时的界面会直接给你这样的东西：
 
@@ -124,11 +130,18 @@ V2bX 错误行
 2026-10-29T09:15:01 ERROR level=error msg="new core failed" err="unknown core type: hysteria2"
 ```
 
-### 4. 证书申请内置
+### 4. 证书：三条路都通
 
-证书方式选 `acme.sh DNS-01`，填域名和 provider 凭据，点「立即申请证书」，面板会调 acme.sh 签发并把证书装到指定路径，然后自动把节点切成「使用已有证书文件」。
+| 方式 | 谁来做 | 说明 |
+|---|---|---|
+| **自签** `self` | 面板（openssl） | EC P-256，带 SAN，10 年。点「生成自签证书」立刻出结果；部署时缺了也会自动补。客户端要开 `insecure`/`allowInsecure` |
+| **DNS-01** `dns` | 装了 acme.sh 就面板签，没装就 V2bX 签 | V2bX 内置 lego，启动时发现证书文件不存在会自己申请。面板的「立即申请」只是提前把结果给你看 |
+| **HTTP-01** `http` | 同上 | 需要 80 端口可达，且域名不能被 CDN 代理（小黄云要关） |
+| **已有文件** `file` | 你自己 | 面板只检查存在性和有效期，不碰文件 |
 
-**凭据只需填一次**——会存进 `/etc/v2bx-panel/dns-creds.json`（600 权限），之后新建节点自动继承，界面上显示为掩码。
+证书状态是实时读出来的（`openssl x509`），界面上直接显示「有效 / 快过期 / 已过期 / 域名不匹配 / 文件不存在」加剩余天数和 CN，域名填错了会当场标红。
+
+**凭据只需填一次**——会存进 `/etc/v2bx-panel/dns-creds.json`（600 权限），之后新建节点自动继承，界面上显示为掩码。掩码不会被当成真凭据发出去，后端会从池子里取真值。
 
 ### 5. 日志和备份
 
@@ -261,7 +274,9 @@ systemctl daemon-reload
 - **V2bX 的端口、path、密码由 Xboard 面板下发**，本面板只管「跑哪些 NodeID」。想改这些还得在 Xboard 里改。
 - **Xboard 里新增节点后，仍需在本面板加一条**（因为老版本 Xboard 没有 `/api/v2/server/machine/nodes` 自动发现接口）。但至少不用再手写 JSON 了。
 - **面板不管理 sing-box 的 users**，那是同步脚本的事，面板只保证重新生成配置时不破坏它。
-- 证书自动续期依赖 acme.sh 自己的 cron，面板不接管。
+- **`socks` / `http` 只能给独立 sing-box 实例用**。V2bX 的 `NewClient` 有硬编码白名单（`api/panel/panel.go:59`），塞进去会 `unsupported Node type` 然后无限重启，所以面板在 V2bX 节点下把这两项禁掉了。
+- **续期分工**：`dns`/`http` 由 V2bX 的 `renewCertTask` 每天检查并续；`self` 由面板在部署时检查，过期或域名变了就重签；`file` 面板完全不碰。
+- **面板不校验 Xboard 那边的 TLS 开关**。Xboard 节点没开 TLS 但你在面板配了证书，不会报错，只是白配；反过来 Xboard 开了 TLS 而面板选「不启用」，节点会以明文监听，客户端连不上。部署后看日志里有没有 TLS 相关报错最直接。
 
 ---
 
