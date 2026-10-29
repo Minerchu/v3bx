@@ -1,88 +1,29 @@
-# V2bX
+# V2bX 稳定分支
 
-**V2board / Xboard 节点服务端**，支持 Vmess / Vless / Trojan / Shadowsocks / Hysteria1&2，单实例对接多节点。
+**给 V2board / Xboard 用的节点服务端**，管 Vmess / Vless / Trojan / Shadowsocks / Hysteria1&2，一个进程对接多个节点。
 
-本仓库基于 [wyx2685/V2bX](https://github.com/wyx2685/V2bX)，在上游基础上做了四件事：**修断流、加面板、补 shadow-tls v3、按节点选出口**。安装方式、配置文件格式、管理命令全部与上游一致，替换二进制即可。
+这是 [wyx2685/V2bX](https://github.com/wyx2685/V2bX) 的分支。上游能跑，但跑到几十个用户、几百个连接之后会暴露几处硬伤——**改个限速全员掉线、踢一个人整个进程 fatal error 退出、加节点要 SSH 手改 JSON**。本分支就做四件事，全部围绕这些：
 
-[![Release](https://img.shields.io/github/v/release/Minerchu/v3bx?label=release&color=blue)](https://github.com/Minerchu/v3bx/releases)
-[![License](https://img.shields.io/badge/license-MPL--2.0-green)](./LICENSE)
-[![](https://img.shields.io/badge/TgChat-UnOfficialV2Board%E4%BA%A4%E6%B5%81%E7%BE%A4-green)](https://t.me/unofficialV2board)
-[![](https://img.shields.io/badge/TgChat-YuzukiProjects%E4%BA%A4%E6%B5%81%E7%BE%A4-blue)](https://t.me/YuzukiProjects)
+| # | 症状 | 一句话修复 | 细节 |
+|---|---|---|---|
+| 1 | 后台改一个用户的限速，他的连接全被掐断 | 限速比对从「uuid+限速」改成只认 uuid，限速变化走热更新 | [断流修复](#1-断流修复) · [docs/STREAM-FIX.md](./docs/STREAM-FIX.md) |
+| 2 | 踢人 / 用户到期，日志一行 `fatal error`，**同机所有节点一起掉线** | `CloseAll` 无锁遍历 map 是根因，加锁 + 快照 + 幂等 | [断流修复](#1-断流修复) |
+| 3 | 加节点要 SSH 进机器改 `config.json`，错一个字整机起不来 | 装完即带 Web 面板，浏览器填表，改崩自动回滚 | [Web 面板](#2-web-面板) · [panel/](./panel/) |
+| 4 | ShadowSocks 想加 shadow-tls v3，得自己拼双层入站 | 面板选插件填参数，自动生成双层入站，计费心跳照旧 | [shadow-tls](#3-shadow-tls-v3) · [SHADOWTLS.md](./SHADOWTLS.md) |
 
-## 相对上游改了什么
+外加上游根本没有的能力：**每个节点单独选出口**（本地直连 / SOCKS5），不用再在「全机一个出口」和「手动改代码」之间二选一 · [OUTBOUND.md](./OUTBOUND.md)
 
-| 能力 | 上游 V2bX | 本项目 |
-|---|---|---|
-| **shadow-tls v3** | 需自行拼双层入站 | 面板插件选 `shadow-tls`、参数填 `host=...;password=...;version=3`，自动生成 shadowtls 外层 + shadowsocks 内层，用户/流量/心跳照旧 · [说明](./SHADOWTLS.md) |
-| **节点级出口** | 全机共用一个默认出站，改单个节点出口只能改代码 | 每个节点单独选「本地直连」或「SOCKS5（可带账号密码）」，xray / sing 都支持 · [说明](./OUTBOUND.md) |
-| **改限速** | 判定为「删用户 + 加用户」，踢掉该用户全部连接 | 按 uuid 比对，限速变化走热更新，连接不断 |
-| **踢人 / 用户到期** | 有概率 `fatal error`，**整进程退出**，同机全节点掉线 | 加锁 + 快照 + 幂等，只关目标链路 |
-| **加节点** | SSH 手改 `config.json`，写错一处整机全挂 | 装完自带 Web 面板，浏览器填表，写错当场拦住，改崩自动回滚 · [面板](./panel/) |
+安装方式、配置格式、管理命令与上游一致，替换二进制即可，`/etc/V2bX/` 原样保留。
 
-> 断流修复、面板、shadow-tls 三项不涉及配置格式变更；节点级出口只是在节点配置里多了一个**可选**字段 `OutboundConfig`，不填就是原来的直连行为，老配置照用。从上游或官方版迁过来，直接跑安装命令即可，`/etc/V2bX/` 原样保留。
-
-**注意：本项目需要搭配[修改版 V2board](https://github.com/wyx2685/v2board)**
-
-## 软件安装
-
-### 一键安装
-
-命令、流程、管理菜单和官方完全一致，只是下载源换成本项目：
+## 一键安装
 
 ```bash
 wget -N https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh && bash install.sh
 ```
 
-脚本会自动识别系统与架构（x86_64 / aarch64）、装依赖、下载安装包、校验 SHA256、写 systemd（Alpine 用 openrc）、设置开机自启，并安装 `V2bX` 管理命令。
+脚本自动识别架构（x86_64 / aarch64）、装依赖、下载安装包、校验 SHA256、写 systemd（Alpine 用 openrc）、设开机自启，最后装好 `V2bX` 命令（`v2bx`、`v3bx` 是它的软链，随便用哪个）。
 
-装完第一次会问你要不要生成配置文件，选 `y` 走向导填面板地址、API Key、节点 ID 即可。
-
-升级时旧二进制会备份到 `/usr/local/V2bX-backup/`（保留最近 3 份），出问题可以直接换回去：
-
-```bash
-cp /usr/local/V2bX-backup/V2bX.<时间戳> /usr/local/V2bX/V2bX && systemctl restart V2bX
-```
-
-### 管理命令
-
-和官方完全一致（大小写不敏感）：
-
-```bash
-V2bX              # 管理菜单（0-18）
-V2bX start        # 启动
-V2bX stop         # 停止
-V2bX restart      # 重启
-V2bX status       # 状态
-V2bX log          # 日志
-V2bX config       # 改配置
-V2bX update       # 更新到最新版
-V2bX update 1.1.1 # 更新到指定版本
-V2bX install      # 重装
-V2bX uninstall    # 卸载
-V2bX version      # 版本
-V2bX generate     # 重新生成配置文件
-V2bX x25519       # 生成 x25519 密钥
-```
-
-### 指定版本安装
-
-```bash
-wget -N https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh && bash install.sh v1.1.1
-```
-
-### 从官方 V2bX 迁移过来
-
-直接跑上面的安装命令即可：配置在 `/etc/V2bX/`，安装器只替换 `/usr/local/V2bX/` 下的二进制，配置原样保留，装完自动重启。
-
-### 手动安装
-
-[手动安装教程](https://v2bx.v-50.me/v2bx/v2bx-xia-zai-he-an-zhuang/install/manual)
-
-## Web 管理面板
-
-**装完就有一个面板，之后不用再碰命令行。**
-
-跑完上面的安装命令，脚本会问三件事（端口、用户名、密码），然后直接把地址和账号打给你：
+装完会问三件事——面板端口、用户名、密码——然后直接把面板地址和账号打给你：
 
 ```
 ========================================================
@@ -94,53 +35,13 @@ wget -N https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh && bash 
 ========================================================
 ```
 
-浏览器打开就是「对接」页，填面板地址和 API Key，点「保存并重启」，这台机器就和 Xboard 接上了。端口、密码、协议参数全部由面板下发，不用在节点机上填。
+后续升级走 `v3bx update`，旧二进制自动备份到 `/usr/local/V2bX-backup/`（留最近 3 份），起不来直接换回去。
 
-保存时会先逐个探测节点：通了就把 Xboard 下发的 SNI 自动填进节点域名，并按需补一张自签证书。新机器从零到能跑，只要填三个字段。
+---
 
-![对接页](panel/docs/screenshots/05-connect.png)
+## 1. 断流修复
 
-| 页面 | 干什么 |
-|---|---|
-| **对接** | 填 Xboard 地址 + API Key，声明跑哪几个节点 ID。「测试连接」会真的去问一次 Xboard，通不通当场知道 |
-| **节点** | 每个节点的证书、监听、协议细节；表单按协议自动适配字段，`hysteria2` 选不到 `xray`，`socks`/`http` 在 V2bX 下直接禁用 |
-| **日志** | 两个服务的日志，错误行自动高亮 |
-| **备份** | 每次改动前的配置快照，一键回滚 |
-
-证书三条路：自签（面板 openssl 生成）、DNS/HTTP-01（acme.sh 或 V2bX 内置 lego）、已有文件。界面上直接显示证书剩余天数、CN，域名填错会标红。
-
-部署走事务：备份 → 校验 → 补证书 → 原子替换 → 重启 → 两次确认 → 失败自动回滚并回显错误行。改崩了不会把机器搞挂。
-
-部署前会探一次本机能不能真的出网 IPv6：没有就把监听地址从 `::` 退回 `0.0.0.0`、域名解析钉死 `ipv4_only`，省掉每条连接先吃一次 `network is unreachable` 再回落的 0.25~1.5 秒；有就保持双栈。节点页顶部能看探测结果，也能手动强制开/关。
-
-零依赖（Python 3 标准库）、单进程、systemd 托管，与二进制完全解耦。详见 [panel/README.md](./panel/README.md)。
-
-不想装面板？安装时回答 `n` 即可，之后用 `v3bx panel install` 补装。
-
-### 面板相关的命令
-
-```bash
-v3bx panel          # 面板地址、账号、端口
-v3bx panel start    # 启动
-v3bx panel stop     # 停止
-v3bx panel restart  # 重启
-v3bx panel log      # 日志
-v3bx panel port     # 改端口（自动查占用，起不来自动回滚）
-v3bx panel passwd   # 重置密码
-v3bx panel uninstall# 卸载
-```
-
-菜单里也有入口：`v3bx` → **17**，主菜单底部会直接显示面板状态和端口，不用翻 `/etc/v2bx-panel/panel.env`：
-
-```
-面板状态: 已运行  端口 18080  http://1.2.3.4:18080/
-```
-
-> 密码只在首次安装时明文写在 `/etc/v2bx-panel/INITIAL_PASSWORD.txt`。在面板里改过密码后那个文件就过期了，菜单会显示「已修改，无法查看」，用 `v3bx panel passwd` 重置即可。
-
-## 断流修复
-
-老版本「用着用着就断、过一会儿又好了」，在服务端这一侧有四个明确根因，本分支已全部修掉。修复思路参考作者新项目 [v2node](https://github.com/wyx2685/v2node)。
+「用着用着就断，过一会儿又好了」——服务端侧有四个明确根因，本分支全修了。修复思路参考上游作者新项目 [v2node](https://github.com/wyx2685/v2node)。
 
 | 问题 | 触发场景 | 症状 | 修复 |
 |---|---|---|---|
@@ -149,72 +50,128 @@ v3bx panel uninstall# 卸载
 | `LinkManager.CloseAll` 无锁遍历 map | 踢人 / 用户到期 | `fatal error`，**进程直接退出**，同机全节点掉线 | 加锁 + 快照 + `closed` 幂等 |
 | `Limiter.AliveList` 是普通 map | 定时任务替换 vs 新连接读 | `concurrent map read and write` | 加 `RWMutex`，统一走 setter |
 
-其中第三条最要命：它不是 panic，`recover` 拦不住，一个用户被踢会让整台机器的所有节点一起掉线，日志里只留一行 `fatal error`。
+第三条最要命：它不是 panic，`recover` 拦不住，一个用户被踢会让整台机器的所有节点一起掉线，日志里只留一行 `fatal error`。
 
-完整的代码分析、复现步骤和回归测试见 **[docs/STREAM-FIX.md](./docs/STREAM-FIX.md)**。
+> 这里修的是**服务端进程内**的断流。如果你遇到的是「用几分钟就卡住、换个 IP 又好了」，那是客户端到入口的链路问题，跟代码无关，得靠优选 IP 或换入口解决。
 
-> 顺带说明：这里修的是**服务端进程内**的断流。如果你遇到的是「用几分钟就卡住、换个 IP 又好了」，那是客户端到入口的链路问题，跟代码无关，得靠优选 IP 或换入口解决。
+## 2. Web 面板
 
-## 特点
+零依赖（Python 3 标准库）、单进程、systemd 托管，和二进制完全解耦。
 
-- 开源免费，MPL-2.0
-- 支持 Vmess / Vless / Trojan / Shadowsocks / Hysteria1&2
-- 支持 Vless 与 XTLS 新特性
-- 单实例对接多节点，无需重复启动
-- 在线 IP 限制、TCP 连接数限制、节点级 / 用户级限速
-- 多内核（xray / sing-box / hysteria2），支持条件编译，只编需要的内核
-- 修改配置自动重启实例
+![对接页](panel/docs/screenshots/05-connect.png)
 
-## 功能介绍
+| 页面 | 干什么 |
+|---|---|
+| **对接** | 填 Xboard 地址 + API Key，声明跑哪几个节点 ID。「测试连接」会真的问一次 Xboard，通不通当场知道 |
+| **节点** | 证书、监听、协议细节；表单按协议自动适配字段，`hysteria2` 选不到 `xray`，`socks`/`http` 在 V2bX 下直接禁用 |
+| **日志** | 两个服务的日志，错误行自动高亮 |
+| **备份** | 每次改动前的配置快照，一键回滚 |
 
-| 功能        | v2ray | trojan | shadowsocks | hysteria1/2 |
-|-----------|-------|--------|-------------|----------|
-| 自动申请tls证书 | √     | √      | √           | √        |
-| 自动续签tls证书 | √     | √      | √           | √        |
-| 在线人数统计    | √     | √      | √           | √        |
-| 审计规则      | √     | √      | √           | √         |
-| 自定义DNS    | √     | √      | √           | √        |
-| 在线IP数限制   | √     | √      | √           | √        |
-| 连接数限制     | √     | √      | √           | √         |
-| 跨节点IP数限制  |√      |√       |√            |√          |
-| 按照用户限速    | √     | √      | √           | √         |
-| 动态限速(未测试) | √     | √      | √           | √         |
+三件事值得单独说：
 
-## TODO
+- **部署是事务**：备份 → 校验 → 补证书 → 原子替换 → 重启 → 两次确认 → 失败自动回滚并回显错误行。改崩了不会把机器搞挂。
+- **证书三条路**：自签（openssl 生成）、DNS/HTTP-01（acme.sh 或内置 lego）、已有文件。界面直接显示剩余天数、CN，域名填错标红。
+- **IPv6 先探测再决定**：部署前真去探一次本机能不能出网 IPv6，不能就把监听从 `::` 退回 `0.0.0.0`、解析钉死 `ipv4_only`，省掉每条连接先吃一次 `network is unreachable` 再回落的 0.25~1.5 秒。
 
-- [ ] 重新实现动态限速
-- [ ] 完善使用文档
-
-## 构建
-``` bash
-# 通过-tags选项指定要编译的内核， 可选 xray， sing, hysteria2
-GOEXPERIMENT=jsonv2 go build -v -o build_assets/V2bX -tags "sing xray hysteria2 with_quic with_grpc with_utls with_wireguard with_acme with_gvisor" -trimpath -ldflags "-X 'github.com/InazumaV/V2bX/cmd.version=$version' -s -w -buildid="
+```bash
+v3bx panel            # 面板地址、账号、端口
+v3bx panel start|stop|restart|log
+v3bx panel port       # 改端口（自动查占用，起不来自动回滚）
+v3bx panel passwd     # 重置密码
+v3bx panel uninstall
 ```
 
-## 配置文件及详细使用教程
+菜单里也有：`v3bx` → **17**。不想装面板？安装时回答 `n`，之后 `v3bx panel install` 补装。
 
-[详细使用教程](https://v2bx.v-50.me/)
+> 密码只在首次安装时明文写进 `/etc/v2bx-panel/INITIAL_PASSWORD.txt`，在面板里改过就过期，用 `v3bx panel passwd` 重置。
+
+## 3. shadow-tls v3
+
+上游会把面板下发的 `plugin` / `plugin_opts` 丢弃，只能跑裸 SS。这里补上了：
+
+面板建 shadowsocks 节点 → 插件选 `shadow-tls` → 参数 `host=...;password=...;version=3`，自动生成两个嵌套入站：
+
+```
+公网 0.0.0.0:2310          shadowtls  ← TLS 回源 host 指定的真实站点
+   │  detour（进程内直接转交）
+   ▼
+127.0.0.1:12310            shadowsocks  ← 多用户、计流量、报心跳
+```
+
+外层端口就是面板的 `server_port`，内层自动挑一个 `server_port + 10000` 附近的空闲回环端口。因为走 `Detour`，**用户认证、流量统计、在线 IP、限速全部仍然落在原节点 tag 上**，和普通 SS 节点行为一致。
+
+被动探测看到的就是一个标准 HTTPS 服务，SNI 和证书来自 `host` 指向的真实站点。内核（`wyx2685/sing-box_mod`，sing-box 1.13 系）自带 shadow-tls 入站，不需要额外进程或配置项。完整说明见 [SHADOWTLS.md](./SHADOWTLS.md)。
+
+## 4. 节点级出口
+
+上游的出口是**全机一个 freedom**，所有节点跑完路由都落到同一个默认出站。现在每个节点能单独选：
+
+- **本地直连** = 原行为，不产生额外出站
+- **SOCKS5** = 这个节点的流量从这个 socks5 出去，可带账号密码，其它节点不受影响
+
+xray 靠「出站 tag 与入站同名 + dispatcher 兜底」，sing 靠写进 `sing_origin.json` 的路由规则，两种内核都支持。节点配置里多一个**可选**字段 `OutboundConfig`，不填就是直连，老配置照用。细节见 [OUTBOUND.md](./OUTBOUND.md)。
+
+---
+
+## 能力清单
+
+- Vmess / Vless / Trojan / Shadowsocks / Hysteria1&2，单实例多节点
+- 多内核（xray / sing-box / hysteria2），条件编译，只编要用的
+- 在线 IP 限制、TCP 连接数限制、节点级 / 用户级限速、动态限速
+- 自定义 DNS、审计规则、在线人数统计、证书自动申请续签
+- MPL-2.0，可商用可改
+
+## 从上游或官方版迁过来
+
+```bash
+wget -N https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh && bash install.sh
+```
+
+配置在 `/etc/V2bX/`，安装器只替换 `/usr/local/V2bX/` 下的二进制，配置原样保留，装完自动重启。手动替换：
+
+```bash
+systemctl stop V2bX
+cp /usr/local/V2bX/V2bX /root/V2bX.bak.$(date +%s)
+cd /tmp && unzip V2bX-linux-64.zip -d v2bx      # arm 用 V2bX-linux-arm64-v8a.zip
+cp v2bx/V2bX /usr/local/V2bX/V2bX && chmod +x /usr/local/V2bX/V2bX
+systemctl start V2bX
+```
+
+二进制静态编译（`CGO_ENABLED=0`），不挑 glibc 版本。
+
+## 构建
+
+```bash
+GOEXPERIMENT=jsonv2 go build -v -o build_assets/V2bX \
+  -tags "sing xray hysteria2 with_quic with_grpc with_utls with_wireguard with_acme with_gvisor" \
+  -trimpath -ldflags "-X 'github.com/InazumaV/V2bX/cmd.version=$version' -s -w -buildid="
+```
+
+两个坑：
+
+- **`GOEXPERIMENT=jsonv2` 必须加**。内核用了 Go 1.25 的 `encoding/json/v2`，不加会报一堆 `package encoding/json/v2 is not in std`。
+- **`with_utls`** 已经取代旧的 `with_reality_server`，继续用旧标签会 `unknown tag`。
+
+`-tags` 里挑内核，可选 `xray`、`sing`、`hysteria2`，不编的能不装。
+
+## 文档索引
+
+| 文档 | 内容 |
+|---|---|
+| [docs/STREAM-FIX.md](./docs/STREAM-FIX.md) | 断流的代码分析、复现步骤、回归测试 |
+| [SHADOWTLS.md](./SHADOWTLS.md) | shadow-tls v3 支持说明 |
+| [OUTBOUND.md](./OUTBOUND.md) | 节点级出口（direct / SOCKS5） |
+| [panel/README.md](./panel/README.md) | 面板实现与接口 |
+| [上游文档](https://v2bx.v-50.me/) | 配置文件格式、字段含义（本项目完全兼容） |
 
 ## 免责声明
 
-* 此项目用于本人自用，因此本人不能保证向后兼容性。
-* 由于本人能力有限，不能保证所有功能的可用性，如果出现问题请在Issues反馈。
-* 本人不对任何人使用本项目造成的任何后果承担责任。
-* 本人比较多变，因此本项目可能会随想法或思路的变动随性更改项目结构或大规模重构代码，若不能接受请勿使用。
-
-## 赞助
-
-[赞助链接](https://v-50.me/)
+- 本项目面向自用场景，不保证向后兼容。
+- 只做服务端软件，不提供任何线路、节点或订阅。使用须遵守你所在地区的法律。
+- 出问题请开 Issues，带上完整日志和 `v3bx version` 输出。
 
 ## Thanks
 
-* [Project X](https://github.com/XTLS/)
-* [V2Fly](https://github.com/v2fly)
-* [VNet-V2ray](https://github.com/ProxyPanel/VNet-V2ray)
-* [Air-Universe](https://github.com/crossfw/Air-Universe)
-* [XrayR](https://github.com/XrayR/XrayR)
-* [sing-box](https://github.com/SagerNet/sing-box)
-
-## Stars 增长记录
-
-[![Stargazers over time](https://starchart.cc/wyx2685/V2bX.svg)](https://starchart.cc/wyx2685/V2bX)
+* [Project X](https://github.com/XTLS/) · [V2Fly](https://github.com/v2fly) · [sing-box](https://github.com/SagerNet/sing-box)
+* [VNet-V2ray](https://github.com/ProxyPanel/VNet-V2ray) · [Air-Universe](https://github.com/crossfw/Air-Universe) · [XrayR](https://github.com/XrayR/XrayR)
+* 上游 [wyx2685/V2bX](https://github.com/wyx2685/V2bX)
