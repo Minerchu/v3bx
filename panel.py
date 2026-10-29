@@ -28,6 +28,8 @@ import secrets
 import hashlib
 import threading
 import subprocess
+import tarfile
+import tempfile
 import urllib.error
 import urllib.request
 import concurrent.futures
@@ -2136,12 +2138,190 @@ def self_sign(domain, cert_file, key_file, days=3650):
             'certFile': str(cert_file), 'keyFile': str(key_file), 'mode': 'self'}
 
 
-def issue_cert(domain, mode, provider, dns_env, email, out_dir, node=None):
-    """签发/生成证书。返回 {ok, log, certFile, keyFile, delegated?}"""
+def cert_brief(path, domain=''):
+    """给前端展示用的证书摘要（域名/签发者/到期/是否自签）"""
+    info = cert_info(str(path), domain)
+    return {
+        'path': str(path),
+        'domain': domain,
+        'cn': info.get('cn', ''),
+        'issuer': info.get('issuer', ''),
+        'notAfter': info.get('notAfter', ''),
+        'days': info.get('days'),
+        'state': info.get('state'),
+        'selfSigned': bool(info.get('self_signed')),
+    }
+
+
+def acme_reason(log):
+    """把 acme.sh 的原始输出翻译成一句人话，前端直接显示。"""
+    low = (log or '').lower()
+    if 'rejectedidentifier' in low or 'forbidden by policy' in low or 'refuses to issue' in low:
+        return ("Let's Encrypt 拒绝给这个域名签发（被政策限制）。"
+                '确认域名不是 example.com 这类保留域名，且真实属于你。')
+    if 'nxdomain' in low or 'invalid domain' in low or 'dns problem' in low:
+        return ('这个域名解析不到 IP，或者 A 记录还没生效。'
+                '先去 DNS 服务商确认域名指向了本机公网 IP。')
+    if ('unauthorized' in low or 'authentication' in low
+            or 'invalidaccesskeyid' in low or 'invalid api' in low):
+        return ('DNS 服务商的 API 凭据不对或权限不足。'
+                'Cloudflare 用 Global API Key 方式时，邮箱和 Key 两个都要填对；'
+                '用 API Token 方式时，Token 需要有该域名的 Zone.DNS 编辑权限。')
+    if 'rate limit' in low or 'too many certificates' in low or 'too many failed' in low:
+        return ("Let's Encrypt 签发次数超限了（同一域名每周 5 张）。"
+                '等一周再试，或者先用「自签证书」顶着。')
+    if 'timeout' in low or 'timed out' in low or 'not propagated' in low:
+        return ('DNS 记录传播超时。确认这个域名确实托管在所选的 DNS 服务商下'
+                '（Cloudflare 的域名，NS 必须指向 Cloudflare）。')
+    if 'invalid response' in low or 'dns txt' in low or 'no valid a records' in low:
+        return '写 DNS TXT 验证记录失败，检查 API 凭据对这个域名有没有 DNS 编辑权限。'
+    if 'command not found' in low or 'no such file' in low:
+        return 'acme.sh 没装好（面板会自动装，失败的话点一次「申请证书」重试）'
+    return ''
+
+
+# acme.sh 必须整包装：单文件版里没有 dnsapi/ 插件目录，DNS-01 会直接
+# 报 "Cannot find DNS API hook for: dns_cf"，然后退回手工加 TXT。
+# 官方 get.acme.sh 只是个 1KB 引导壳，还会再跳一次，个别机房会卡住。
+ACME_TARBALLS = (
+    'https://codeload.github.com/acmesh-official/acme.sh/tar.gz/refs/heads/master',
+    'https://gitee.com/neilpang/acme.sh/repository/archive/master.tar.gz',
+)
+ACME_SCRIPT = 'https://raw.githubusercontent.com/acmesh-official/acme.sh/master/acme.sh'
+
+
+def _safe_extract(tar, dest):
+    """解压 tar，挡掉绝对路径和 .. 越界成员。"""
+    dest = Path(dest).resolve()
+    for m in tar.getmembers():
+        p = (dest / m.name).resolve()
+        if p != dest and not str(p).startswith(str(dest) + os.sep):
+            raise ValueError(f'压缩包里有越界路径：{m.name}')
+    tar.extractall(dest)
+
+
+def install_acme(email='', logger=None):
+    """安装 acme.sh 完整包（含 dnsapi 插件），幂等。返回 (ok, log)。
+
+    面板在「点了申请证书、但机器上没有 acme.sh」时自动调用 ——
+    用户不用登 SSH 敲任何命令，点一下按钮就够了。
+    """
+    def _emit(s):
+        if logger:
+            try:
+                logger(s)
+            except Exception:
+                pass
+
+    home = Path(ACME).parent
+    if Path(ACME).exists() and (home / 'dnsapi').is_dir():
+        return True, 'acme.sh 已安装'
+
+    _emit('这台机器还没装 acme.sh，自动装一下（不用你动手）…')
+    tmpdir = tempfile.mkdtemp(prefix='.acme-inst-')
+    top, err = None, ''
+    try:
+        for url in ACME_TARBALLS:
+            _emit(f'· 下载 {url}')
+            try:
+                req = urllib.request.Request(
+                    url, headers={'User-Agent': 'v2bx-panel/1.0'})
+                with urllib.request.urlopen(req, timeout=45) as resp:
+                    blob = resp.read()
+                if len(blob) < 50000:
+                    err = f'包太小（{len(blob)} 字节）'
+                    _emit(f'  {err}，换下一个源')
+                    continue
+                tgz = Path(tmpdir) / 'acme.tgz'
+                tgz.write_bytes(blob)
+                _emit(f'  下载完成 {len(blob) // 1024} KB，解压…')
+                with tarfile.open(tgz) as tf:
+                    _safe_extract(tf, tmpdir)
+                for d in sorted(Path(tmpdir).iterdir()):
+                    if d.is_dir() and (d / 'acme.sh').is_file():
+                        top = d
+                        break
+                if top:
+                    _emit(f'  解压到 {top.name}/')
+                    break
+                err = '包里没找到 acme.sh'
+                _emit(f'  {err}')
+            except Exception as e:
+                err = str(e)
+                _emit(f'  失败：{e}')
+
+        if not top:
+            # 兜底：单文件版，能跑 HTTP-01，但 DNS 插件缺失
+            _emit('· 整包都不通，退回单文件版（DNS 模式可能缺插件）')
+            try:
+                req = urllib.request.Request(
+                    ACME_SCRIPT, headers={'User-Agent': 'v2bx-panel/1.0'})
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    blob = resp.read()
+                if len(blob) > 2000:
+                    top = Path(tmpdir) / 'single'
+                    top.mkdir()
+                    (top / 'acme.sh').write_bytes(blob)
+                    (top / 'acme.sh').chmod(0o755)
+            except Exception as e:
+                err = str(e)
+        if not top:
+            return False, f'acme.sh 下载失败（{err or "所有源都不通"}）'
+
+        env = dict(os.environ)
+        env['HOME'] = env.get('HOME') or '/root'
+        args = ['sh', str(top / 'acme.sh'), '--install']
+        if email:
+            args += ['-m', email]
+        _emit('· 执行安装脚本')
+        # cwd 必须是脚本所在目录：acme.sh 的 install 里用的是
+        # `cp acme.sh "$_c_home"` 这种相对路径，换个目录就 cp 不到
+        p = subprocess.Popen(args, stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True,
+                             bufsize=1, env=env, cwd=str(top))
+        tail = []
+        for line in iter(p.stdout.readline, ''):
+            line = line.rstrip('\n')
+            if line:
+                tail.append(line)
+                _emit('  ' + line)
+        p.wait(timeout=120)
+
+        if not Path(ACME).exists():
+            return False, f'安装脚本跑完了，但没找到 {ACME}'
+
+        # --install 只复制 acme.sh 单文件，dnsapi/deploy 得自己补
+        for sub in ('dnsapi', 'deploy'):
+            src = top / sub
+            if src.is_dir():
+                shutil.copytree(src, home / sub, dirs_exist_ok=True)
+        n = len(list((home / 'dnsapi').glob('dns_*.sh'))) if (home / 'dnsapi').is_dir() else 0
+        _emit(f'· acme.sh 已就绪：{ACME}（DNS 插件 {n} 个）')
+        return True, '\n'.join(tail[-20:])
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def issue_cert(domain, mode, provider, dns_env, email, out_dir, node=None, logger=None):
+    """签发/生成证书。
+
+    返回 {ok, log, certFile, keyFile, certInfo, existed?, delegated?, reason?}
+    existed=True 表示本地本来就有可用证书，没有重新申请。
+    reason 是给人看的一句话失败原因。
+    logger(line) 会收到 acme.sh 的每一行实时输出（前端用它做进度显示）。
+    """
+    def _emit(line):
+        if logger:
+            try:
+                logger(line)
+            except Exception:
+                pass
+
     domain = (domain or '').strip()
     if not DOMAIN_RE.match(domain):
-        return {'ok': False, 'log': f'域名格式不合法：{domain or "（空）"}。'
-                                    f'支持 example.com 和 *.example.com'}
+        return {'ok': False, 'reason': '域名格式不合法',
+                'log': f'域名格式不合法：{domain or "（空）"}。'
+                       f'支持 example.com 和 *.example.com'}
 
     # 凭据：前端可能传掩码，从池子里取真值
     env_vals = {}
@@ -2151,31 +2331,117 @@ def issue_cert(domain, mode, provider, dns_env, email, out_dir, node=None):
     if not env_vals and provider:
         env_vals = dict(load_creds().get(provider, {}))
 
+    crt, key = cert_paths(domain)
+    if out_dir and str(out_dir) not in ('/etc/V2bX', ''):
+        crt = Path(out_dir) / f'{safe_name(domain)}.crt'
+        key = Path(out_dir) / f'{safe_name(domain)}.key'
+    crt.parent.mkdir(parents=True, exist_ok=True)
+
     if mode == 'self':
-        crt, key = cert_paths(domain)
-        if out_dir and str(out_dir) not in ('/etc/V2bX', ''):
-            crt = Path(out_dir) / f'{safe_name(domain)}.crt'
-            key = Path(out_dir) / f'{safe_name(domain)}.key'
-        return self_sign(domain, crt, key)
+        _emit('生成自签证书（EC P-256，含 SAN，10 年）…')
+        r = self_sign(domain, crt, key)
+        _emit('完成' if r.get('ok') else '生成失败')
+        if not r.get('ok'):
+            r.setdefault('reason', 'openssl 生成失败')
+        r['certInfo'] = cert_brief(crt, domain)
+        return r
 
     if mode not in ('dns', 'http'):
-        return {'ok': False, 'log': f'不支持的证书方式：{mode}'}
+        return {'ok': False, 'reason': f'不支持的证书方式：{mode}', 'log': ''}
+
+    # ---- 1. 本地已经有可用的真证书：直接返回，不重复打 Let's Encrypt ----
+    # 这是「填了凭据点申请却提示失败」的根源之一：证书早就签好了，acme.sh
+    # 发现域名没变会跳过并以非 0 退出，被当成失败弹出来。
+    if crt.exists() and key.exists():
+        ci = cert_info(str(crt), domain)
+        if (ci.get('state') in ('ok', 'expiring') and not ci.get('self_signed')
+                and (ci.get('days') or 0) > 30):
+            _emit(f'本地已有 {domain} 的有效证书')
+            _emit(f'签发者：{ci.get("issuer") or "?"}　到期：{ci.get("notAfter")}'
+                  f'（还剩 {ci.get("days")} 天）')
+            _emit('未到续期时间，本次不重新申请')
+            return {'ok': True, 'existed': True,
+                    'log': f'本地已有 {domain} 的有效证书，本次没有重新申请。\n'
+                           f'签发者：{ci.get("issuer") or "?"}\n'
+                           f'到期：{ci.get("notAfter")}（还剩 {ci.get("days")} 天）\n'
+                           f'文件：{crt}',
+                    'certFile': str(crt), 'keyFile': str(key),
+                    'certInfo': cert_brief(crt, domain)}
 
     if not Path(ACME).exists():
-        # 不报死错：V2bX 内置 lego，证书文件不存在时启动即申请
-        return {'ok': False, 'delegated': True,
-                'log': f'这台机器没装 acme.sh（{ACME}）。\n\n'
-                       f'不用装也能签：V2bX 启动时发现证书文件不存在，会用内置 lego '
-                       f'按 CertConfig 里的 Provider + DNSEnv 自动申请。\n'
-                       f'直接点「保存并重启」，然后看日志里的 obtain certificate 即可。\n\n'
-                       f'想在这里当场看到结果的话，装一下：\n'
-                       f'  curl https://get.acme.sh | sh -s email=你的邮箱'}
+        # 先自动装。装不上再退到 V2bX 内置 lego（保存重启时静默申请）
+        ok, ilog = install_acme(email, _emit)
+        if not ok:
+            return {'ok': False, 'delegated': True,
+                    'reason': '自动安装 acme.sh 失败',
+                    'log': f'{ilog}\n\n'
+                           f'不影响签发：V2bX 启动时发现证书文件不存在，会用内置 lego '
+                           f'按 CertConfig 里的 Provider + DNSEnv 自动申请。\n'
+                           f'直接点「保存」再点「部署到服务器」，然后看日志里的 '
+                           f'obtain certificate 即可。'}
 
     plugin = ACME_DNS_PLUGIN.get(provider or '')
     if mode == 'dns' and not plugin:
-        return {'ok': False, 'log': f'acme.sh 没有对应 <code>{provider}</code> 的 DNS 插件。'
-                                    f'可选：' + '、'.join(sorted(set(ACME_DNS_PLUGIN.values())))}
+        return {'ok': False, 'reason': '这个 DNS 服务商没有对应的 acme.sh 插件',
+                'log': f'acme.sh 没有对应 {provider} 的 DNS 插件。'
+                       f'可选：' + '、'.join(sorted(set(ACME_DNS_PLUGIN.values())))}
 
+    # ---- 2. acme.sh 里可能早就有这个域名的证书（签过但没装到这里）----
+    # 先直接装一次，能省掉一整轮 DNS 验证，几秒就出结果。
+    def _run_acme(args, timeout=240, env=None, quiet=False):
+        """跑 acme.sh，边跑边把每一行喂给 logger，返回 (returncode, 全量输出)。
+
+        quiet=True 时不往进度里推 —— 用于 install-cert 的预检：那时候
+        证书本来就可能不存在，acme.sh 会吐「not a cert name」之类的
+        噪音，显示出来只会让人以为出错了。
+        """
+        buf = []
+        try:
+            p = subprocess.Popen(args, stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, text=True,
+                                 bufsize=1, env=env)
+        except Exception as e:
+            return 1, f'启动 acme.sh 失败：{e}'
+        t0 = time.time()
+        try:
+            for line in iter(p.stdout.readline, ''):
+                line = line.rstrip('\n')
+                if line:
+                    buf.append(line)
+                    if not quiet:
+                        _emit(line)
+                if time.time() - t0 > timeout:
+                    p.kill()
+                    buf.append(f'[超时] acme.sh 超过 {timeout} 秒没结束，已终止')
+                    _emit(buf[-1])
+                    break
+        finally:
+            try:
+                p.stdout.close()
+            except Exception:
+                pass
+            p.wait()
+        return p.returncode, '\n'.join(buf)
+
+    def _try_install(quiet=False):
+        c2 = [ACME, '--install-cert', '-d', domain, '--ecc',
+              '--fullchain-file', str(crt), '--key-file', str(key)]
+        rc, txt = _run_acme(c2, timeout=90, quiet=quiet)
+        return rc, txt
+
+    _emit('检查 acme.sh 本地是否已有该域名的证书…')
+    rr, ilog = _try_install(quiet=True)
+    if rr == 0 and crt.exists() and key.exists():
+        ci = cert_info(str(crt), domain)
+        if ci.get('state') in ('ok', 'expiring') and not ci.get('self_signed'):
+            _emit('本地已有有效证书，直接安装，不重新申请')
+            return {'ok': True, 'existed': True,
+                    'log': '从 acme.sh 已有的证书直接安装，没有重新申请。\n' + ilog[-1200:],
+                    'certFile': str(crt), 'keyFile': str(key),
+                    'certInfo': cert_brief(crt, domain)}
+    _emit('本地没有可用证书，开始向 Let\'s Encrypt 申请')
+
+    # ---- 3. 真正去申请 ----
     env = dict(os.environ)
     for k, v in env_vals.items():
         env[ACME_ENV_MAP.get(k, k)] = v
@@ -2185,38 +2451,77 @@ def issue_cert(domain, mode, provider, dns_env, email, out_dir, node=None):
         cmd += ['--dns', plugin]
     else:
         cmd += ['--standalone']
-    cmd += ['-d', domain, '--keylength', 'ec-256']
+    cmd += ['-d', domain, '--keylength', 'ec-256', '--force']
     if email:
         cmd += ['--accountemail', email]
-    # 只有证书确实不存在时才加 --force，避免反复打 Let's Encrypt 的速率限制
-    crt0, _ = cert_paths(domain)
-    if not crt0.exists():
-        cmd.append('--force')
 
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=240, env=env)
-        log = (r.stdout or '') + (r.stderr or '')
-    except subprocess.TimeoutExpired:
-        return {'ok': False, 'log': 'acme.sh 执行超时（240s）。DNS 生效慢时正常，'
-                                    '也可能是 API 凭据没权限。'}
-    if r.returncode != 0:
-        return {'ok': False, 'log': log[-4000:]}
+    rc, log = _run_acme(cmd, timeout=240, env=env)
 
-    out_dir = Path(out_dir or CERT_DIR)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    fullchain = out_dir / f'{safe_name(domain)}.crt'
-    keyfile = out_dir / f'{safe_name(domain)}.key'
+    if rc != 0:
+        low = log.lower()
+        # acme.sh 在「域名没变、未到续期时间」时会跳过并以非 0 退出 —— 这不是失败。
+        if 'domains not changed' in low or 'skipping' in low or 'cert success' in low:
+            if crt.exists() and key.exists():
+                ci = cert_info(str(crt), domain)
+                if ci.get('state') in ('ok', 'expiring'):
+                    _emit('acme.sh 判断证书仍在有效期内，跳过重签')
+                    return {'ok': True, 'existed': True,
+                            'log': 'acme.sh 判断证书还在有效期内，跳过重新申请。\n' + log[-2000:],
+                            'certFile': str(crt), 'keyFile': str(key),
+                            'certInfo': cert_brief(crt, domain)}
+        _emit('申请失败')
+        return {'ok': False, 'reason': acme_reason(log), 'log': log[-4000:]}
+
+    # ---- 4. 装到面板管理的路径 ----
     # 不写 --reloadcmd：申请完就重启会造成一次无谓闪断，交给「部署」统一重启
-    cmd2 = [ACME, '--install-cert', '-d', domain, '--ecc',
-            '--fullchain-file', str(fullchain), '--key-file', str(keyfile)]
-    try:
-        r2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=90)
-        log += '\n' + (r2.stdout or '') + (r2.stderr or '')
-    except subprocess.TimeoutExpired:
-        return {'ok': False, 'log': log + '\n安装证书超时'}
+    _emit('安装证书到 ' + str(crt))
+    rr, ilog2 = _try_install()
+    log += '\n' + ilog2
 
-    return {'ok': fullchain.exists() and keyfile.exists(), 'log': log[-4000:],
-            'certFile': str(fullchain), 'keyFile': str(keyfile), 'mode': 'file'}
+    ok = crt.exists() and key.exists()
+    out = {'ok': ok, 'log': log[-4000:], 'certFile': str(crt), 'keyFile': str(key),
+           'certInfo': cert_brief(crt, domain)}
+    if not ok:
+        out['reason'] = '证书签发成功但安装到目标路径失败'
+    return out
+
+# ---- 证书申请任务：后台线程跑 acme.sh，前端轮询实时日志 ----
+# 同步接口要等 4 分钟才有响应，用户只能看着「申请中…」干等，看不出卡在哪。
+# 改成任务制：点按钮立刻返回 job id，前端每秒拉增量日志，进度实时可见。
+CERT_JOBS = {}
+_CERT_JOB_LOCK = threading.Lock()
+
+
+def cert_job_start(domain, mode, provider, dns_env, email, out_dir, node=None):
+    jid = secrets.token_hex(6)
+    job = {'id': jid, 'state': 'running', 'lines': [], 'result': None,
+           'domain': domain, 'mode': mode, 't0': time.time()}
+    with _CERT_JOB_LOCK:
+        # 清掉半小时前的老任务，避免字典无限增长
+        for k in [k for k, v in CERT_JOBS.items() if time.time() - v['t0'] > 1800]:
+            CERT_JOBS.pop(k, None)
+        CERT_JOBS[jid] = job
+
+    def _log(line):
+        with _CERT_JOB_LOCK:
+            job['lines'].append(line)
+            if len(job['lines']) > 1200:
+                del job['lines'][:400]
+
+    def _run():
+        try:
+            res = issue_cert(domain, mode, provider, dns_env, email, out_dir,
+                             node, logger=_log)
+        except Exception as e:
+            res = {'ok': False, 'reason': f'面板内部错误：{e}', 'log': ''}
+        with _CERT_JOB_LOCK:
+            job['result'] = res
+            job['state'] = 'ok' if res.get('ok') else 'fail'
+            job['t1'] = time.time()
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {'ok': True, 'job': jid}
+
 
 # ============================================================
 # HTTP 服务
@@ -2391,9 +2696,35 @@ class Handler(BaseHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query)
             path = (q.get('path') or [''])[0]
             domain = (q.get('domain') or [''])[0]
+            # 传进来的 path 可能是旧默认值（如 /etc/V2bX/fullchain.cer）或空，
+            # 只要文件不存在就按域名推导面板管理的路径 —— 这样刚打开表单、
+            # 还没点过「申请证书」也能看到机器上现有证书的真实状态。
+            if domain and (not path or not Path(path).exists()):
+                path = str(cert_paths(domain)[0])
             if not path:
-                return self._err('缺少 path')
-            return self._json(cert_info(path, domain or None))
+                return self._err('缺少 path 或 domain')
+            out = cert_info(path, domain or None)
+            out['path'] = path
+            return self._json(out)
+
+        if p == '/api/cert/job':
+            q = parse_qs(urlparse(self.path).query)
+            jid = (q.get('id') or [''])[0]
+            try:
+                since = int((q.get('since') or ['0'])[0] or 0)
+            except ValueError:
+                since = 0
+            job = CERT_JOBS.get(jid)
+            if not job:
+                return self._err('任务不存在或已过期')
+            with _CERT_JOB_LOCK:
+                lines = job['lines'][since:]
+                total = len(job['lines'])
+                state = job['state']
+                result = job['result']
+            return self._json({'ok': True, 'state': state, 'lines': lines,
+                               'total': total, 'result': result,
+                               'elapsed': round(time.time() - job['t0'], 1)})
 
         if p == '/api/connect':
             return self._json(read_connect())
@@ -2472,6 +2803,13 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self._err(f'生成失败: {e}')
             return self._json({'content': json.dumps(cfg, ensure_ascii=False, indent=2)})
+
+        if p == '/api/cert/job/start':
+            b = self._body() or {}
+            return self._json(cert_job_start(
+                b.get('domain', ''), b.get('mode') or 'dns',
+                b.get('provider', 'cloudflare'), b.get('dnsEnv') or {},
+                b.get('email', ''), b.get('outDir') or '', b.get('node')))
 
         if p == '/api/cert/issue':
             b = self._body() or {}
