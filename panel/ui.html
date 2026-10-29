@@ -753,6 +753,23 @@ function renderForm() {
   const needTls = meta.tls !== 'none';
   const H = ['<div id="formHint"></div>'];
 
+  // ---- 对接 ----
+  // 新机器第一次进来时全局是空的，而「添加节点」表单里原来根本没有这两个
+  // 字段，用户填完协议和 ID 点保存，直接被 4 条校验挡住，还找不到地方改。
+  // 所以把地址和密钥直接放进添加流程，一次填完。
+  if (!isSb) {
+    const g = S.global || {};
+    H.push('<fieldset><legend>对接</legend>');
+    H.push('<div class="grid2">');
+    H.push('<div class="f"><label>面板地址 ApiHost <span class="req">*</span></label>' +
+      '<input data-gf="apiHost" value="' + esc(g.apiHost || '') + '" placeholder="https://xbb.example.com">' +
+      '<div class="hint">Xboard 地址，不要带结尾斜杠。整台机器共用这一个，填一次后面自动带出</div></div>');
+    H.push('<div class="f"><label>对接密钥 ApiKey <span class="req">*</span></label>' +
+      '<input data-gf="apiKey" type="password" value="' + (g.apiKey ? '••••••••' : '') + '" placeholder="Xboard 通讯密钥">' +
+      '<div class="hint">Xboard 后台 → 系统设置 → 服务端通讯密钥</div></div>');
+    H.push('</div></fieldset>');
+  }
+
   // ---- 基础 ----
   H.push('<fieldset><legend>基础</legend>');
   H.push('<div class="grid2">');
@@ -788,8 +805,12 @@ function renderForm() {
 
   if (!isSb) {
     H.push('<div class="f"><label>面板 NodeID <span class="req">*</span></label>' +
-      '<input data-f="nodeId" type="number" min="1" value="' + esc(n.nodeId) + '">' +
-      '<div class="hint">Xboard 面板里该节点的 ID</div></div>');
+      '<div style="display:flex;gap:8px;align-items:flex-start">' +
+        '<input data-f="nodeId" type="number" min="1" value="' + esc(n.nodeId) + '" style="flex:1">' +
+        '<button class="btn sm" id="btnProbe" type="button" style="white-space:nowrap">验证</button>' +
+      '</div>' +
+      '<div class="hint" id="probeHint">Xboard 面板 → 节点管理 → 该节点的 ID。' +
+        '填完点「验证」：通不通当场知道，还能自动带出 SNI 域名和面板下发的端口</div></div>');
   } else {
     H.push('<div class="f"><label>监听地址</label>' +
       '<input data-f="listenIP" value="' + esc(n.listenIP) + '" placeholder="0.0.0.0">' +
@@ -870,6 +891,9 @@ function renderForm() {
     H.push('<fieldset><legend>证书 / TLS</legend>');
     if (meta.tls === 'required') {
       H.push('<div class="tip">该协议<b>必须</b>启用 TLS，不能选「不启用」。</div>');
+    } else if (meta.tls === 'optional') {
+      H.push('<div class="tip">该协议 TLS 可选。<b>不启用</b>能直接跑，先用它把链路跑通最省事；' +
+        '要防探测再选「自签」（客户端得开 <code>allowInsecure</code>）或 DNS-01 签真证书。</div>');
     }
     H.push('<div class="grid2">');
     H.push('<div class="f"><label>证书方式 <span class="req">*</span></label><select data-f="certMode">' +
@@ -879,7 +903,7 @@ function renderForm() {
       }).join('') + '</select></div>');
     H.push('<div class="f"><label>域名 / SNI' + (c.mode!=='none'?' <span class="req">*</span>':'') + '</label>' +
       '<input data-f="certDomain" value="' + esc(c.domain) + '" placeholder="node.example.com">' +
-      '<div class="hint">必须和 Xboard 里该节点的 SNI 一致。留空的话，对接页保存时会自动从面板探测回来。</div></div>');
+      '<div class="hint">必须和 Xboard 里该节点的 SNI 一致。填完 NodeID 点上面的「验证」能自动带出来。</div></div>');
     H.push('</div>');
 
     if (c.mode === 'file' || c.mode === 'self') {
@@ -908,20 +932,28 @@ function renderForm() {
       }
       H.push('</div>');
       if (c.mode === 'dns') {
-        const need = (S.meta.providerEnv[c.provider] || []);
+        const pf = (S.meta.providerFields || {})[c.provider] || {groups: [], fields: {}};
         const hasPool = !!(((S.meta.creds || {})[c.provider]) || {});
         H.push('<div class="tip">' +
           (hasPool
             ? '已从凭据池继承 <b>' + esc(c.provider) + '</b> 的凭据（显示为掩码），无需重复填写。'
-            : '申请证书需要 <b>' + esc(c.provider) + '</b> 的 API 凭据，填一次后会自动记入凭据池，后续新节点直接复用。') +
+            : '申请证书需要 <b>' + esc(pf.label || c.provider) + '</b> 的 API 凭据，填一次后会自动记入凭据池，后续新节点直接复用。') +
           '这些值会写进 config.json 的 <code>DNSEnv</code>，V2bX 启动时也会用它续期。</div>');
-        H.push('<div class="grid2">');
-        need.forEach(k => {
-          const v = (c.dnsEnv && c.dnsEnv[k]) || '';
-          H.push('<div class="f"><label>' + esc(k) + '</label><input data-env="' + esc(k) + '" type="password" value="' +
-            (v ? '••••••••' : '') + '" placeholder="' + esc(k) + '"></div>');
+        (pf.groups || []).forEach(gr => {
+          H.push('<div style="margin-bottom:12px">');
+          if (gr.title) H.push('<div style="font-size:12px;color:var(--txt);margin-bottom:6px">' + gr.title + '</div>');
+          H.push('<div class="grid2">');
+          (gr.keys || []).forEach(k => {
+            const fd = (pf.fields || {})[k] || {label: k, ph: ''};
+            const v = (c.dnsEnv && c.dnsEnv[k]) || '';
+            H.push('<div class="f"><label>' + esc(fd.label) + '</label>' +
+              '<input data-env="' + esc(k) + '"' + (fd.plain ? '' : ' type="password"') +
+              ' value="' + (v ? '••••••••' : '') + '" placeholder="' + esc(fd.ph || '') + '"></div>');
+          });
+          H.push('</div>');
+          if (gr.hint) H.push('<div class="hint" style="margin-top:-4px">' + gr.hint + '</div>');
+          H.push('</div>');
         });
-        H.push('</div>');
       }
       H.push('<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">' +
         '<button class="btn sm" id="btnIssue">立即申请证书</button>' +
@@ -1001,8 +1033,63 @@ function bindForm() {
   $$('#nodeForm [data-env]').forEach(el => {
     el.addEventListener('input', onField);
   });
+  $$('#nodeForm [data-gf]').forEach(el => {
+    el.addEventListener('input', onGlobalField);
+    el.addEventListener('change', onGlobalField);
+  });
   const bi = $('#btnIssue');
   if (bi) bi.addEventListener('click', doIssue);
+  const bp = $('#btnProbe');
+  if (bp) bp.addEventListener('click', probeNodeForm);
+}
+
+/* 表单里的「面板地址 / 对接密钥」是全局的，直接写回 S.global，
+   这样关掉弹窗也不会丢，部署时跟着 global 一起提交。 */
+function onGlobalField(e) {
+  const k = e.target.dataset.gf;
+  const v = e.target.value.trim();
+  if (k === 'apiKey' && v === '••••••••') return;   // 没改就别覆盖
+  S.global[k] = v;
+  setTimeout(validateForm, 0);
+}
+
+/* 点「验证」：真的去问一次 Xboard 这个 NodeID 存不存在、是什么协议、
+   端口多少、SNI 是什么。通了就把域名自动填上，省得用户去面板里翻。 */
+async function probeNodeForm() {
+  const n = S.editing;
+  const g = S.global || {};
+  const hint = $('#probeHint');
+  if (!hint) return;
+  if (!g.apiHost) { hint.innerHTML = '<span style="color:var(--err)">先填上面的「面板地址」</span>'; return; }
+  if (!n.nodeId) { hint.innerHTML = '<span style="color:var(--err)">先填 NodeID</span>'; return; }
+  hint.innerHTML = '<span style="color:var(--dim)">验证中…</span>';
+  try {
+    const r = await api('/api/connect/test', {
+      method: 'POST',
+      body: {apiHost: g.apiHost, apiKey: g.apiKey || '', nodeId: n.nodeId, nodeType: n.nodeType},
+    });
+    if (!r.ok) {
+      hint.innerHTML = '<span style="color:var(--err)">✗ ' + esc(r.msg || '不通') + '</span>' +
+        '<div style="margin-top:4px;color:var(--dim2)">检查 NodeID 是否在 Xboard 里、密钥对不对、这台机器能不能访问面板地址</div>';
+      return;
+    }
+    const d = r.detail || {};
+    let s = '<span style="color:var(--ok)">✓ ' + esc(r.msg) + '</span>';
+    if (d.protocol && d.protocol !== n.nodeType) {
+      s += ' <span style="color:var(--warn)">面板里这个节点是 ' + esc(d.protocol) +
+           '，和上面选的 ' + esc(n.nodeType) + ' 不一致，客户端会连不上</span>';
+    }
+    hint.innerHTML = s;
+    if (d.serverName && !n.cert.domain) {
+      n.cert.domain = d.serverName;
+      const el = document.querySelector('[data-f="certDomain"]');
+      if (el) el.value = d.serverName;
+      if (n.cert.mode !== 'none') renderForm();
+      toast('已自动填入域名 ' + d.serverName, 'ok');
+    }
+  } catch (e) {
+    hint.innerHTML = '<span style="color:var(--err)">' + esc(e.message) + '</span>';
+  }
 }
 
 function onField(e) {
@@ -1027,8 +1114,9 @@ function onField(e) {
     n.nodeType = v;
     const m = S.meta.protocols[v];
     if (!m.cores.includes(n.core)) n.core = m.cores[0];
+    // 必 TLS 的协议默认给自签：不需要任何凭据，点保存就能起
     if (m.tls === 'none') n.cert.mode = 'none';
-    else if (n.cert.mode === 'none' && m.tls === 'required') n.cert.mode = 'dns';
+    else if (m.tls === 'required' && n.cert.mode === 'none') n.cert.mode = 'self';
     renderForm();
     return;
   }

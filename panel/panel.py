@@ -104,6 +104,9 @@ DNS_PROVIDERS = ['cloudflare', 'alidns', 'dnspod', 'dns_dp', 'dns_ali', 'gcore',
 
 # 各 provider 需要的环境变量：外层数组是 OR，内层数组是 AND
 # 例 cloudflare: (有 DNS_API_TOKEN) 或 (有 API_KEY + EMAIL)
+#
+# 注意：这里的变量名是 **lego** 的（V2bX 内置 lego 直接读 DNSEnv），
+# 不是 acme.sh 的。两者对 Cloudflare 不一样，签发时要转换，见 ACME_ENV_MAP。
 PROVIDER_ENV = {
     'cloudflare': [['CLOUDFLARE_DNS_API_TOKEN'], ['CLOUDFLARE_API_KEY', 'CLOUDFLARE_EMAIL']],
     'alidns':     [['Ali_Key', 'Ali_Secret']],
@@ -113,6 +116,85 @@ PROVIDER_ENV = {
     'gcore':      [['GCORE_Key']],
     'route53':    [['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY']],
     'namecheap':  [['NAMECHEAP_API_USER', 'NAMECHEAP_API_KEY']],
+}
+
+# 界面上的字段文案。键名照搬 lego 的变量名，用户看到的必须是「CF 账号邮箱」
+# 而不是 CLOUDFLARE_EMAIL —— 后者既不知道填什么，也不知道和 Token 是二选一。
+PROVIDER_FIELDS = {
+    'cloudflare': {
+        'label': 'Cloudflare',
+        'groups': [
+            {'title': 'API Token（推荐）',
+             'keys': ['CLOUDFLARE_DNS_API_TOKEN'],
+             'hint': 'CF 后台 → 右上头像 → My Profile → API Tokens → Create Token，'
+                     '权限选 <b>Zone → DNS → Edit</b>，Zone Resources 选包含该域名。'
+                     '只填这一个就行。'},
+            {'title': '或者 Global API Key + 邮箱（旧方式，两个都要填）',
+             'keys': ['CLOUDFLARE_API_KEY', 'CLOUDFLARE_EMAIL'],
+             'hint': 'My Profile → API Keys → Global API Key。邮箱就是登录 CF 的账号邮箱。'},
+        ],
+        'fields': {
+            'CLOUDFLARE_DNS_API_TOKEN': {'label': 'API Token', 'ph': '粘贴 CF 的 API Token'},
+            'CLOUDFLARE_API_KEY':       {'label': 'Global API Key', 'ph': '粘贴 Global API Key'},
+            'CLOUDFLARE_EMAIL':         {'label': 'CF 账号邮箱', 'ph': 'you@example.com', 'plain': True},
+        },
+    },
+    'alidns': {
+        'label': '阿里云 DNS',
+        'groups': [{'title': 'AccessKey（两个都要填）',
+                    'keys': ['Ali_Key', 'Ali_Secret'],
+                    'hint': '阿里云控制台 → 右上头像 → AccessKey 管理。建议用 RAM 子账号，'
+                            '只授权 <b>AliyunDNSFullAccess</b>，别用主账号 AK。'}],
+        'fields': {
+            'Ali_Key':    {'label': 'AccessKey ID', 'ph': 'LTAI...'},
+            'Ali_Secret': {'label': 'AccessKey Secret', 'ph': '点「显示」后复制'},
+        },
+    },
+    'dnspod': {
+        'label': 'DNSPod（腾讯云）',
+        'groups': [{'title': 'API 密钥（两个都要填）',
+                    'keys': ['DP_Id', 'DP_Key'],
+                    'hint': 'DNSPod 控制台 → 用户中心 → 安全设置 → API 密钥。'
+                            'ID 是纯数字，Token 是一长串。'}],
+        'fields': {
+            'DP_Id':  {'label': 'DNSPod ID', 'ph': '纯数字'},
+            'DP_Key': {'label': 'API Token', 'ph': ''},
+        },
+    },
+    'route53': {
+        'label': 'AWS Route 53',
+        'groups': [{'title': 'IAM 凭据（两个都要填）',
+                    'keys': ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY'],
+                    'hint': 'IAM 用户需要 <b>route53:ChangeResourceRecordSets</b> 权限。'}],
+        'fields': {
+            'AWS_ACCESS_KEY_ID':     {'label': 'Access Key ID', 'ph': 'AKIA...'},
+            'AWS_SECRET_ACCESS_KEY': {'label': 'Secret Access Key', 'ph': ''},
+        },
+    },
+}
+PROVIDER_FIELDS['dns_dp'] = PROVIDER_FIELDS['dnspod']
+PROVIDER_FIELDS['dns_ali'] = PROVIDER_FIELDS['alidns']
+
+
+def provider_fields(prov):
+    """给前端的字段定义；没单独配的 provider 退回「变量名当标签」。"""
+    d = PROVIDER_FIELDS.get(prov)
+    if d:
+        return d
+    keys = flatten_env_keys(prov)
+    return {'label': prov, 'groups': [{'title': '凭据', 'keys': keys, 'hint': ''}],
+            'fields': {k: {'label': k, 'ph': ''} for k in keys}}
+
+
+# acme.sh 的环境变量名和 lego 不一样（Cloudflare 尤其明显）。
+# 面板存的是 lego 名（要写进 config.json 给 V2bX 续期用），
+# 但调 acme.sh 时必须换成它认的名字，否则 dns_cf 读不到凭据，签发必失败。
+ACME_ENV_MAP = {
+    'CLOUDFLARE_DNS_API_TOKEN': 'CF_Token',
+    'CLOUDFLARE_API_KEY':       'CF_Key',
+    'CLOUDFLARE_EMAIL':         'CF_Email',
+    'AWS_ACCESS_KEY_ID':        'AWS_ACCESS_KEY_ID',
+    'AWS_SECRET_ACCESS_KEY':    'AWS_SECRET_ACCESS_KEY',
 }
 
 def flatten_env_keys(prov):
@@ -674,9 +756,12 @@ def list_backups(limit=40):
 
 def blank_node(owner='v2bx', node_type='vless'):
     meta = PROTOCOLS.get(node_type, PROTOCOLS['vless'])
-    # 必 TLS 的协议默认给「自签」：Xboard 那边很多节点就是自签 + 客户端
-    # insecure，选 dns 反而要先备齐 API 凭据才能保存。想要真证书，
-    # 用户改一次下拉即可，证书路径会自动跟着域名走。
+    # 证书默认值：
+    #   tls=optional（vless/vmess）-> 不启用。这两个协议本来就能明文跑，
+    #     默认塞一张自签只会逼用户去填一个他还没想好的域名。
+    #   tls=required（trojan/hy2/tuic）-> 自签。自签不需要任何凭据，点保存
+    #     就能起；想换真证书改一下下拉即可。原来默认 dns，新用户没有 API
+    #     凭据时会卡在「缺少 API 凭据」上，而他根本不知道要去哪申请。
     return {
         'uid': secrets.token_hex(6),
         'owner': owner,
@@ -686,7 +771,7 @@ def blank_node(owner='v2bx', node_type='vless'):
         'listenIP': '::' if owner == 'v2bx' else '0.0.0.0',
         'listenPort': 443 if owner == 'singbox' else 0,
         'cert': {
-            'mode': 'none' if meta['tls'] == 'none' else 'self',
+            'mode': 'none' if meta['tls'] in ('none', 'optional') else 'self',
             'domain': '',
             'certFile': '',
             'keyFile': '',
@@ -1072,16 +1157,25 @@ def validate_node(n, all_nodes, g):
                 out.append({'level': 'error', 'field': 'cert.provider', 'msg': 'DNS 模式必须选 provider'})
             else:
                 state, detail = check_env(prov, c.get('dnsEnv'))
+                pf = provider_fields(prov)
+                flabel = pf.get('label') or prov
+                fdefs = pf.get('fields') or {}
+                def _fname(k):
+                    return (fdefs.get(k) or {}).get('label') or k
                 if state == 'missing':
                     need = ' 或 '.join(
-                        '+'.join(f'<code>{k}</code>' for k in grp)
+                        '+'.join(f'<b>{_fname(k)}</b>' for k in grp)
                         for grp in PROVIDER_ENV.get(prov, []))
                     out.append({'level': 'error', 'field': 'cert.dnsEnv',
-                                'msg': f'provider <code>{prov}</code> 缺少 API 凭据，需要：{need}'})
+                                'msg': f'{flabel} 还缺凭据：{need}。'
+                                       f'就在下面「{flabel}」那几栏里填，填一次会记住，'
+                                       f'以后新建节点自动复用'})
                 elif state == 'partial':
+                    miss = detail.replace('缺少 ', '').replace('<code>', '').replace('</code>', '')
                     out.append({'level': 'warn', 'field': 'cert.dnsEnv',
-                                'msg': f'<code>{prov}</code> 凭据不完整，{detail}；'
-                                       f'如果用的是 API Token 可忽略，否则签发会失败'})
+                                'msg': f'{flabel} 的凭据只填了一半（{miss}）。'
+                                       f'如果用 API Token 这一种，忽略这条；'
+                                       f'如果用 Global Key，邮箱和 Key 要一起填'})
         if mode == 'http':
             out.append({'level': 'info', 'field': 'cert.mode',
                         'msg': 'HTTP-01 需要 80 端口可被外网访问，且该域名不能被 CF 代理（小黄云必须关闭）'})
@@ -1868,7 +1962,8 @@ def issue_cert(domain, mode, provider, dns_env, email, out_dir, node=None):
                                     f'可选：' + '、'.join(sorted(set(ACME_DNS_PLUGIN.values())))}
 
     env = dict(os.environ)
-    env.update(env_vals)
+    for k, v in env_vals.items():
+        env[ACME_ENV_MAP.get(k, k)] = v
 
     cmd = [ACME, '--issue', '--server', 'letsencrypt']
     if mode == 'dns':
@@ -2030,6 +2125,7 @@ class Handler(BaseHTTPRequestHandler):
                 'certModes': CERT_MODES,
                 'providers': DNS_PROVIDERS,
                 'providerEnv': {k: flatten_env_keys(k) for k in PROVIDER_ENV},
+                'providerFields': {k: provider_fields(k) for k in DNS_PROVIDERS},
                 'creds': masked_creds(),
                 'services': {
                     'v2bx': svc_status(V2BX_SERVICE),
