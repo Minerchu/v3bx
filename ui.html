@@ -194,6 +194,32 @@ pre.log .g{color:var(--ok)}
 .tip b{color:var(--txt)}
 .warnbox{font-size:12.5px;color:#e8c46a;background:#241d10;border:1px solid #6b5320;
   border-radius:7px;padding:10px 13px;line-height:1.7;margin-bottom:14px}
+/* 证书详情卡片：点完「申请证书」直接把签下来的东西摊开给人看 */
+.certcard{background:#0f141a;border:1px solid var(--line);border-radius:9px;
+  padding:12px 14px;margin-bottom:14px}
+.certcard .cr{display:flex;gap:12px;font-size:12.5px;line-height:1.95}
+.certcard .cr .k{flex:0 0 56px;color:var(--dim2);flex-shrink:0}
+.certcard .cr .v{flex:1;color:var(--txt);word-break:break-all}
+details.rawlog{margin-top:12px}
+details.rawlog summary{cursor:pointer;font-size:12px;color:var(--dim2);
+  padding:7px 0;user-select:none;outline:none}
+details.rawlog summary:hover{color:var(--txt)}
+details.rawlog[open] summary{margin-bottom:8px}
+/* 申请证书的实时进度：每一步点亮，让用户看清卡在哪 */
+.csteps{margin-bottom:14px}
+.cstep{display:flex;align-items:center;gap:9px;font-size:12.5px;line-height:2;
+  color:var(--dim2)}
+.cstep .dot{width:15px;height:15px;border-radius:50%;border:1.5px solid var(--line);
+  flex-shrink:0;display:flex;align-items:center;justify-content:center;
+  font-size:9px;color:transparent;transition:all .2s}
+.cstep.run{color:var(--txt)}
+.cstep.run .dot{border-color:var(--acc);border-right-color:transparent;
+  animation:spin .8s linear infinite}
+.cstep.ok{color:var(--txt)}
+.cstep.ok .dot{background:var(--ok);border-color:var(--ok);color:#0b0f13}
+.cstep.bad{color:var(--err)}
+.cstep.bad .dot{background:var(--err);border-color:var(--err);color:#0b0f13}
+@keyframes spin{to{transform:rotate(360deg)}}
 .warnbox b{color:#ffd97a}
 .warnbox code{background:#3a2e14;color:#ffd97a;padding:1px 5px;border-radius:4px}
 @media(max-width:720px){
@@ -725,7 +751,7 @@ function newNode(type, owner) {
     listenPort: 0,
     cert: {
       mode: meta.tls === 'none' ? 'none' : 'dns',
-      domain: '', certFile: '/etc/V2bX/fullchain.cer', keyFile: '/etc/V2bX/cert.key',
+      domain: '', certFile: '', keyFile: '',
       email: '', provider: defProv, dnsEnv: dnsEnv,
     },
     remark: '',
@@ -966,11 +992,12 @@ function renderForm() {
       });
     }
     if (c.mode === 'dns' || c.mode === 'http') {
-      H.push('<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">' +
+      H.push('<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">' +
         '<button class="btn sm" id="btnIssue">立即申请证书</button>' +
         '<span id="certStat" style="font-size:12px;color:var(--dim)">读取中…</span></div>');
-      H.push('<div class="tip">不点这个也行：证书文件不存在时，V2bX 启动会用内置 lego ' +
-        '按上面的 Provider + DNSEnv 自动申请，点「部署」一样能签下来。</div>');
+      H.push('<div class="tip">点「立即申请证书」= <b>现在就用上面的凭据在这台机器上签</b>，' +
+        '签完会直接把证书的签发者、有效期摊开给你看，不用等部署。<br>' +
+        '不点也行：点「保存」再点「部署到服务器」，V2bX 启动时发现没证书会自己签。</div>');
     }
     H.push('</fieldset>');
   } else {
@@ -1011,18 +1038,24 @@ function refreshCertStat() {
   const box = $('#certStat');
   if (!box) return;
   const c = (S.editing && S.editing.cert) || {};
-  if (!c.certFile) { box.textContent = '还没有证书路径'; return; }
-  api('/api/cert/status?path=' + encodeURIComponent(c.certFile) +
+  if (!c.domain) { box.innerHTML = '<span style="color:var(--dim2)">先填域名</span>'; return; }
+  // 只传域名也行：后端会按面板命名规则推导证书路径，
+  // 这样刚打开表单（还没点过申请）也能看到机器上现有证书的真实状态。
+  api('/api/cert/status?path=' + encodeURIComponent(c.certFile || '') +
       '&domain=' + encodeURIComponent(c.domain || ''))
     .then(d => {
-      const LBL = {ok:'有效', expiring:'快过期', expired:'已过期', missing:'文件不存在',
-                   mismatch:'域名不匹配', invalid:'无法解析'};
+      const LBL = {ok:'有效', expiring:'快过期', expired:'已过期', missing:'这台机器上还没有证书',
+                   mismatch:'域名不匹配', invalid:'文件无法解析'};
       const col = d.state === 'ok' ? 'var(--ok)'
-                : d.state === 'expiring' ? 'var(--warn)' : 'var(--err)';
+                : d.state === 'expiring' ? 'var(--warn)'
+                : d.state === 'missing' ? 'var(--dim2)' : 'var(--err)';
       let s = '<span style="color:' + col + '">● ' + esc(LBL[d.state] || d.state) + '</span>';
       if (d.notAfter) s += ' <span style="color:var(--dim2)">到期 ' + esc(d.notAfter) +
         (d.days != null ? '（' + d.days + ' 天）' : '') + '</span>';
-      if (d.cn) s += ' <span style="color:var(--dim2)">CN=' + esc(d.cn) + '</span>';
+      if (d.issuer && d.state !== 'missing') {
+        s += ' <span style="color:' + (d.self_signed ? 'var(--warn)' : 'var(--dim2)') + '">' +
+          esc(d.self_signed ? '自签' : d.issuer) + '</span>';
+      }
       box.innerHTML = s;
     })
     .catch(() => { box.textContent = '状态读取失败'; });
@@ -1193,6 +1226,11 @@ function onField(e) {
       if (cf) cf.value = n.cert.certFile;
       if (kf) kf.value = n.cert.keyFile;
     }
+    if (k === 'certDomain') {
+      // 域名变了证书状态就变了，防抖刷新一下（别每次按键都请求）
+      clearTimeout(window.__certStatT);
+      window.__certStatT = setTimeout(refreshCertStat, 400);
+    }
     return;
   }
   if (k === 'outType') {
@@ -1236,6 +1274,57 @@ async function saveNode() {
   toast('已加入待部署列表，点「部署到服务器」生效');
 }
 
+/* 证书详情卡片：把签发者/有效期/路径摊开，别只弹个 toast */
+function certCard(ci) {
+  if (!ci) return '';
+  const selfSigned = !!ci.selfSigned;
+  const days = ci.days;
+  const warnDays = days != null && days < 14;
+  const issuerCol = selfSigned ? 'var(--warn)' : (warnDays ? 'var(--warn)' : 'var(--ok)');
+  const rows = [
+    ['域名', ci.cn || ci.domain || '—'],
+    ['签发者', (ci.issuer || '未知') +
+      (selfSigned ? '　（自签 · 客户端必须开 insecure）' : '　（受信任 CA，客户端免配置）')],
+    ['有效期', (ci.notAfter || '—') + (days != null ? '　还剩 ' + days + ' 天' : '')],
+    ['证书文件', ci.path || '—'],
+  ];
+  return '<div class="certcard">' + rows.map(([k, v]) =>
+    '<div class="cr"><span class="k">' + k + '</span><span class="v"' +
+    (k === '签发者' ? ' style="color:' + issuerCol + '"' : '') + '>' + esc(v) + '</span></div>'
+  ).join('') + '</div>';
+}
+
+/* 申请证书的五个阶段，按 acme.sh 输出里的关键词点亮 */
+const CERT_STEPS = [
+  {t: '准备 acme.sh 与 DNS 凭据', re: /检查 acme\.sh|本地没有可用证书|acme\.sh 本地|acme\.sh 判断|自动装一下|acme\.sh 已就绪|acme\.sh 已安装|DNS 插件/i},
+  {t: "向 Let's Encrypt 发起申请", re: /Using server|Single domain|Create account|Getting domain auth token|Register account/i},
+  {t: '写 DNS 验证记录', re: /TXT|Adding TXT|Add TXT|Creating TXT|txt value/i},
+  {t: '等待 DNS 生效并验证', re: /Verifying|Checking|Pending|Sleep|not yet|propagat/i},
+  {t: '安装证书到本机', re: /Cert success|Your cert is in|Installing|安装证书|Skipping/i},
+];
+
+function certStepIndex(lines) {
+  const txt = lines.join('\n');
+  let idx = 0;
+  CERT_STEPS.forEach((s, i) => { if (s.re.test(txt)) idx = i; });
+  return idx;
+}
+
+function renderCertSteps(active, done, failed) {
+  return '<div class="csteps">' + CERT_STEPS.map((s, i) => {
+    let cls = '';
+    if (failed && i === active) cls = 'bad';
+    else if (done || i < active) cls = 'ok';
+    else if (i === active) cls = 'run';
+    const mark = cls === 'ok' ? '✓' : (cls === 'bad' ? '✕' : '');
+    return '<div class="cstep ' + cls + '"><span class="dot">' + mark + '</span>' +
+      esc(s.t) + '</div>';
+  }).join('') + '</div>';
+}
+
+let certJobTimer = null;
+let certJobLines = [];
+
 async function doIssue() {
   const n = S.editing;
   const c = n.cert;
@@ -1243,14 +1332,9 @@ async function doIssue() {
   // 「文件」方式面板只负责检查，不会去签发
   if (c.mode === 'file') { refreshCertStat(); toast('已刷新证书状态', 'ok'); return; }
   const btn = $('#btnIssue');
-  const isSelf = c.mode === 'self';
-  const isFile = c.mode === 'file';
   btn.disabled = true;
-  const label = $('#certStat');
-  if (label) label.textContent = isSelf ? '生成中…' : '申请中，最长 4 分钟…';
 
   // 掩码绝不能当真凭据发给后端，否则 acme.sh 会拿 "••••••••" 去调 DNS API。
-  // 这里把掩码整个丢掉，后端会自动回落到凭据池里的真值。
   const env = {};
   Object.keys(c.dnsEnv || {}).forEach(k => {
     const v = c.dnsEnv[k];
@@ -1258,40 +1342,114 @@ async function doIssue() {
   });
 
   try {
-    const r = await api('/api/cert/issue', {
+    const r = await api('/api/cert/job/start', {
       method: 'POST',
       body: {domain: c.domain, mode: c.mode, provider: c.provider,
              dnsEnv: env, email: c.email, outDir: ''},
     });
-    if (r.ok) {
-      if (r.certFile) c.certFile = r.certFile;
-      if (r.keyFile) c.keyFile = r.keyFile;
-      if (r.mode) c.mode = r.mode;
-      renderForm();
-      toast(isSelf ? '自签证书已生成' : '证书签发成功', 'ok');
-    } else if (r.delegated) {
-      // 没装 acme.sh —— 不是错误，V2bX 启动时会自己签
-      showResult('证书会在部署时自动签发', [
-        {name: 'acme.sh', ok: false, detail: '未安装（不影响）'},
-        {name: 'V2bX 内置 lego', ok: true, detail: '部署时自动申请'},
-      ], '<div class="tip" style="margin-bottom:12px">这台机器没装 acme.sh，<b>不需要装</b>。' +
-        '直接点「保存」再点「部署到服务器」，V2bX 启动时会用内置 lego 按上面的 DNS 凭据自动签证书。' +
-        '签完去日志页看到 <code>obtain certificate</code> 就是成功了。</div>' +
-        '<pre class="log">' + esc(r.log || '') + '</pre>', []);
-      toast('没装 acme.sh 不影响：点「部署」由 V2bX 自己签', 'ok');
-    } else {
-      showResult(isSelf ? '生成自签证书失败' : '证书申请失败',
-                 [{name: isSelf ? 'openssl' : 'acme.sh', ok: false, detail: '失败'}],
-                 '<pre class="log">' + esc(r.log || '无输出') + '</pre>', []);
-      toast(isSelf ? '生成失败' : '申请失败', 'err');
-    }
+    if (!r.ok) { toast(r.msg || '启动失败', 'err'); btn.disabled = false; return; }
+    openCertProgress(c.domain, c.mode === 'self');
+    pollCertJob(r.job, c, btn);
   } catch (e) {
     toast(e.message, 'err');
-  } finally {
     btn.disabled = false;
-    refreshCertStat();
   }
 }
+
+function openCertProgress(domain, isSelf) {
+  certJobLines = [];
+  $('#mResultTitle').textContent = isSelf
+    ? '正在生成自签证书…' : '正在为 ' + domain + ' 申请证书…';
+  $('#resultBody').innerHTML =
+    renderCertSteps(0, false, false) +
+    '<pre class="log" id="certLog" style="max-height:280px">等待 acme.sh 输出…</pre>' +
+    '<div style="margin-top:10px;font-size:12px;color:var(--dim2)">' +
+    '正常 10 秒到 3 分钟，DNS 传播慢时更久。这个窗口可以关掉，后台会继续跑；' +
+    '重新点「立即申请证书」可以再看一次进度。</div>';
+  $('#mResult').classList.add('on');
+}
+
+async function pollCertJob(jid, c, btn) {
+  let since = 0;
+  let active = 0;
+  if (certJobTimer) { clearTimeout(certJobTimer); certJobTimer = null; }
+  const tick = async () => {
+    let d;
+    try {
+      d = await api('/api/cert/job?id=' + jid + '&since=' + since);
+    } catch (e) {
+      certJobTimer = setTimeout(tick, 1500);
+      return;
+    }
+    if (d.lines && d.lines.length) {
+      since += d.lines.length;
+      certJobLines = certJobLines.concat(d.lines);
+      const box = document.getElementById('certLog');
+      if (box) {
+        if (box.textContent === '等待 acme.sh 输出…') box.textContent = '';
+        box.textContent += (box.textContent ? '\n' : '') + d.lines.join('\n');
+        box.scrollTop = box.scrollHeight;
+      }
+      active = Math.max(active, certStepIndex(certJobLines));
+      const st = document.querySelector('.csteps');
+      if (st) st.outerHTML = renderCertSteps(active, d.state !== 'running', d.state === 'fail');
+    }
+    if (d.state === 'running') { certJobTimer = setTimeout(tick, 700); return; }
+    finishCertJob(d.result || {}, c, btn);
+  };
+  tick();
+}
+
+function finishCertJob(r, c, btn) {
+  if (btn) btn.disabled = false;
+  const isSelf = c.mode === 'self';
+  const rawLog = certJobLines.join('\n') || '无输出';
+  if (r.ok) {
+    if (r.certFile) c.certFile = r.certFile;
+    if (r.keyFile) c.keyFile = r.keyFile;
+    // 绝对不改 c.mode：选 dns 就必须留 dns，否则 DNSEnv 丢掉，
+    // 证书到期后 V2bX 没法自动续期。
+    renderForm();
+    const ci = r.certInfo || {};
+    const title = r.existed ? '证书已就绪（本地已有，没有重复申请）'
+                            : (isSelf ? '自签证书已生成' : '证书申请成功');
+    showResult(title, [
+      {name: '域名', ok: true, detail: ci.cn || c.domain},
+      {name: '来源', ok: true, detail: isSelf ? '面板自签'
+        : (r.existed ? '复用本地已有证书' : "Let's Encrypt（DNS-01）")},
+    ], certCard(ci) +
+      (isSelf ? '<div class="warnbox">⚠ <b>自签证书，客户端必须开 <code>insecure</code></b><br>' +
+        '不开一定握手失败、连不上。想免配置直接连，就把证书方式改成「DNS 验证」签一张真证书。</div>'
+        : '<div class="tip">证书文件已经落到本机了。<b>还差两步才生效</b>：' +
+          '关掉这个窗口 → 点表单里的「保存」→ 再点右上角「部署到服务器」。' +
+          '部署时 V2bX 会重启并加载这张证书。</div>') +
+      '<details class="rawlog"><summary>展开签发过程日志</summary>' +
+      '<pre class="log">' + esc(rawLog) + '</pre></details>', []);
+    toast(title, 'ok');
+  } else if (r.delegated) {
+    showResult('acme.sh 没装上，改由 V2bX 内置签发', [
+      {name: 'acme.sh', ok: false, detail: '自动安装失败'},
+      {name: 'V2bX 内置 lego', ok: true, detail: '部署时自动申请'},
+    ], '<div class="warnbox">⚠ 面板自动装 acme.sh 没成功（多半是这台机器到 GitHub 的线路问题），' +
+      '但<b>不影响签证书</b>。直接点「保存」再点「部署到服务器」，V2bX 启动时会用内置 lego ' +
+      '按上面的 DNS 凭据自动签。签完去日志页看到 <code>obtain certificate</code> 就是成功了。' +
+      '<br>区别只是：看不到签发过程，失败时也看不出卡在哪一步。</div>' +
+      '<details class="rawlog"><summary>展开详细说明</summary>' +
+      '<pre class="log">' + esc(r.log || '') + '</pre></details>', []);
+    toast('acme.sh 没装上，点「部署」由 V2bX 自己签', 'warn');
+  } else {
+    showResult(isSelf ? '生成自签证书失败' : '证书申请失败',
+      [{name: isSelf ? 'openssl' : 'acme.sh', ok: false, detail: '失败'}],
+      '<div class="check error"><span class="ico">✕</span><div><b>原因：</b>' +
+        esc(r.reason || '签发失败，但没能自动识别原因。把下面这段原始输出发给技术支持即可。') +
+        '</div></div>' +
+      '<details class="rawlog"><summary>展开 acme.sh 原始输出（贴给技术支持看这个）</summary>' +
+      '<pre class="log">' + esc(rawLog) + '</pre></details>', []);
+    toast(isSelf ? '生成失败' : '申请失败', 'err');
+  }
+  refreshCertStat();
+}
+
 
 /* ================= 部署 ================= */
 async function doValidate() {
