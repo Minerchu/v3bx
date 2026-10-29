@@ -37,6 +37,26 @@ wget -N https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh && bash 
 
 后续升级走 `v3bx update`，旧二进制自动备份到 `/usr/local/V2bX-backup/`（留最近 3 份），起不来直接换回去。
 
+<details>
+<summary>全部管理命令</summary>
+
+```bash
+v3bx              # 管理菜单
+v3bx start|stop|restart|status
+v3bx log          # 看日志
+v3bx config       # 改配置
+v3bx update[ 版本号]
+v3bx install|uninstall
+v3bx version
+v3bx generate     # 重新生成配置文件
+v3bx x25519       # 生成 x25519 密钥
+v3bx panel ...
+```
+
+`V2bX`、`v2bx`、`v3bx` 三个名字指向同一个脚本，用哪个都行。
+
+</details>
+
 ---
 
 ## 1. 断流修复
