@@ -49,12 +49,13 @@ V2bX 的内核很稳，麻烦都出在「怎么改它」。下面四个场景都
 
 ![对接页](panel/docs/screenshots/05-connect.png)
 
-四个页面：
+五个页面：
 
 - **对接** —— 填 Xboard 地址 + API Key，声明跑哪几个节点 ID。「测试连接」会真的问一次 Xboard，通不通当场知道。
 - **节点** —— 协议、端口、证书、传输层。表单按协议自动适配：`hysteria2` 选不到 `xray`，`socks` / `http` 在 V2bX 下直接禁用。
 - **日志** —— 两个服务的日志，错误行自动高亮。
 - **备份** —— 每次改动前的配置快照，一键回滚。
+- **设置** —— 面板密码、监听端口、IPv6 策略。
 
 ### 部署是一次事务
 
@@ -101,7 +102,7 @@ bash <(curl -fsSL -H "Accept: application/vnd.github.raw" \
 
 > **为什么不用 `raw.githubusercontent.com`**：raw 有 5 分钟 CDN 缓存，刚更新完面板就重装会拿到旧文件。上面这条走 GitHub API，每次都取最新版。
 
-### 它会问你三件事
+### 它会问你几个问题
 
 ```
 是否安装 Web 管理面板？(Y/n): y
@@ -126,7 +127,7 @@ bash <(curl -fsSL -H "Accept: application/vnd.github.raw" \
 
 ### 然后三步
 
-**1. 放行端口**（十个人里八个卡在这）
+**1. 放行端口**（最容易卡住的一步）
 
 ```bash
 # 有 ufw 的
