@@ -334,6 +334,20 @@ def svc_status(name):
 def svc_restart(name):
     return run(['systemctl', 'restart', name], timeout=40)
 
+def singbox_installed():
+    """这台机器上有没有独立的 sing-box 实例（shadowtls + ss + hy2 那一套）。
+
+    新装的机器只有 V2bX 一个服务，/etc/sing-shadowtls/ 根本不存在。
+    之前保存时不加判断地去写那个路径、重启那个服务，结果：
+      - 写配置时父目录不存在 -> FileNotFoundError -> 接口 500
+      - 重启不存在的服务 -> wait_stable 判失败 -> 触发回滚
+    两种表现都是「保存不了」。
+    """
+    if SINGBOX_CONFIG.exists():
+        return True
+    code, _ = run(['systemctl', 'cat', SINGBOX_SERVICE], timeout=5)
+    return code == 0
+
 def get_logs(name, lines=120):
     code, out = run(['journalctl', '-u', name, '-n', str(lines),
                      '--no-pager', '-o', 'cat'], timeout=15)
@@ -975,6 +989,17 @@ class Store:
             old_v2bx = self.read_json(V2BX_CONFIG, {})
             old_sb = self.read_json(SINGBOX_CONFIG, {})
 
+            # 没装独立 sing-box 的机器（新装的基本都是），不能碰那套配置和服务
+            if target in ('all', 'singbox') and not singbox_installed():
+                if target == 'singbox':
+                    return {'ok': False, 'stage': 'precheck', 'steps': [],
+                            'errors': [{'level': 'error', 'field': '', 'msg':
+                                        f'这台机器没有独立的 sing-box 实例（{SINGBOX_CONFIG} 不存在），'
+                                        f'无法单独保存 sing-box 配置。V2bX 自己的节点请在「节点」页保存。'}]}
+                target = 'v2bx'
+                steps.append({'name': '跳过 sing-box', 'ok': True,
+                              'detail': '未安装独立实例，本次只写 V2bX 配置'})
+
             for n in nodes:
                 resolve_creds(n)
 
@@ -1036,6 +1061,7 @@ class Store:
             if target in ('all', 'v2bx'):
                 os.replace(tmp_v2bx, V2BX_CONFIG)
             if target in ('all', 'singbox'):
+                SINGBOX_CONFIG.parent.mkdir(parents=True, exist_ok=True)
                 tmp_sb.write_text(json.dumps(new_sb, ensure_ascii=False, indent=2))
                 os.replace(tmp_sb, SINGBOX_CONFIG)
             steps.append({'name': '写入配置', 'ok': True, 'detail': '已原子替换'})
