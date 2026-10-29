@@ -1317,7 +1317,14 @@ def validate_node(n, all_nodes, g):
             if not prov:
                 out.append({'level': 'error', 'field': 'cert.provider', 'msg': 'DNS 模式必须选 provider'})
             else:
-                state, detail = check_env(prov, c.get('dnsEnv'))
+                # 校验要连凭据池一起看：节点自己的 dnsEnv 常常是空的（界面上
+                # 明确写着「已从凭据池继承」），只查节点自己就会误报「还缺凭据」，
+                # 用户照着提示去填、填完还是同样的错，只能干瞪眼。
+                merged = dict(load_creds().get(prov, {}))
+                for k, v in (c.get('dnsEnv') or {}).items():
+                    if v and v not in (MASK, '••••••••'):
+                        merged[k] = v
+                state, detail = check_env(prov, merged)
                 pf = provider_fields(prov)
                 flabel = pf.get('label') or prov
                 fdefs = pf.get('fields') or {}
