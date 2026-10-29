@@ -18,8 +18,12 @@
 ## 一键安装
 
 ```bash
-wget -N https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh && bash install.sh
+bash <(curl -fsSL -H "Accept: application/vnd.github.raw" \
+  "https://api.github.com/repos/Minerchu/v3bx/contents/install.sh?ref=main")
 ```
+
+> 用 API 直读而不是 `wget raw.githubusercontent.com`：raw 有 5 分钟 CDN 缓存，
+> 刚更新完面板就重装会拿到旧文件。这条命令每次都取最新版。
 
 脚本自动识别架构（x86_64 / aarch64）、装依赖、下载安装包、校验 SHA256、写 systemd（Alpine 用 openrc）、设开机自启，最后装好 `V2bX` 命令（`v2bx`、`v3bx` 是它的软链，随便用哪个）。
 
@@ -144,8 +148,12 @@ xray 靠「出站 tag 与入站同名 + dispatcher 兜底」，sing 靠写进 `s
 ## 从上游或官方版迁过来
 
 ```bash
-wget -N https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh && bash install.sh
+bash <(curl -fsSL -H "Accept: application/vnd.github.raw" \
+  "https://api.github.com/repos/Minerchu/v3bx/contents/install.sh?ref=main")
 ```
+
+> 用 API 直读而不是 `wget raw.githubusercontent.com`：raw 有 5 分钟 CDN 缓存，
+> 刚更新完面板就重装会拿到旧文件。这条命令每次都取最新版。
 
 配置在 `/etc/V2bX/`，安装器只替换 `/usr/local/V2bX/` 下的二进制，配置原样保留，装完自动重启。手动替换：
 
