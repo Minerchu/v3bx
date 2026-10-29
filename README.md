@@ -1,20 +1,26 @@
 # V2bX
 
-> **本项目基于 [wyx2685/V2bX](https://github.com/wyx2685/V2bX)，增加了 Shadowsocks 的 shadow-tls v3 插件支持。**
->
-> 面板里插件选 `shadow-tls`、参数填 `host=...;password=...;version=3` 即可生效，V2bX 会自动生成 shadowtls 外层 + shadowsocks 内层两个嵌套入站，用户管理、流量统计、心跳全部照旧。
->
-> 安装方式与上游完全一致：替换二进制、配置文件不动。详见 **[SHADOWTLS.md](./SHADOWTLS.md)**。
->
-> 预编译二进制见 [Releases](https://github.com/Minerchu/v3bx/releases)。
+**V2board / Xboard 节点服务端**，支持 Vmess / Vless / Trojan / Shadowsocks / Hysteria1&2，单实例对接多节点。
 
+本仓库基于 [wyx2685/V2bX](https://github.com/wyx2685/V2bX)，在上游基础上做了三件事：**修断流、加面板、补 shadow-tls v3**。安装方式、配置文件格式、管理命令全部与上游一致，替换二进制即可。
+
+[![Release](https://img.shields.io/github/v/release/Minerchu/v3bx?label=release&color=blue)](https://github.com/Minerchu/v3bx/releases)
+[![License](https://img.shields.io/badge/license-MPL--2.0-green)](./LICENSE)
 [![](https://img.shields.io/badge/TgChat-UnOfficialV2Board%E4%BA%A4%E6%B5%81%E7%BE%A4-green)](https://t.me/unofficialV2board)
 [![](https://img.shields.io/badge/TgChat-YuzukiProjects%E4%BA%A4%E6%B5%81%E7%BE%A4-blue)](https://t.me/YuzukiProjects)
 
-A V2board node server based on multi core, modified from XrayR.  
-一个基于多种内核的V2board节点服务端，修改自XrayR，支持V2ay,Trojan,Shadowsocks协议。
+## 相对上游改了什么
 
-**注意： 本项目需要搭配[修改版V2board](https://github.com/wyx2685/v2board)**
+| 能力 | 上游 V2bX | 本项目 |
+|---|---|---|
+| **shadow-tls v3** | 需自行拼双层入站 | 面板插件选 `shadow-tls`、参数填 `host=...;password=...;version=3`，自动生成 shadowtls 外层 + shadowsocks 内层，用户/流量/心跳照旧 · [说明](./SHADOWTLS.md) |
+| **改限速** | 判定为「删用户 + 加用户」，踢掉该用户全部连接 | 按 uuid 比对，限速变化走热更新，连接不断 |
+| **踢人 / 用户到期** | 有概率 `fatal error`，**整进程退出**，同机全节点掉线 | 加锁 + 快照 + 幂等，只关目标链路 |
+| **加节点** | SSH 手改 `config.json`，写错一处整机全挂 | Web 面板填表，写错当场拦住，改崩自动回滚 · [面板](./panel/) |
+
+> 三个改动都不涉及配置格式变更。从上游或官方版迁过来，直接跑安装命令即可，`/etc/V2bX/` 原样保留。
+
+**注意：本项目需要搭配[修改版 V2board](https://github.com/wyx2685/v2board)**
 
 ## 软件安装
 
@@ -49,7 +55,7 @@ V2bX status       # 状态
 V2bX log          # 日志
 V2bX config       # 改配置
 V2bX update       # 更新到最新版
-V2bX update 1.1.0 # 更新到指定版本
+V2bX update 1.1.1 # 更新到指定版本
 V2bX install      # 重装
 V2bX uninstall    # 卸载
 V2bX version      # 版本
@@ -96,7 +102,7 @@ V2bX panel uninstall# 卸载
 ### 指定版本安装
 
 ```bash
-wget -N https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh && bash install.sh v1.1.0
+wget -N https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh && bash install.sh v1.1.1
 ```
 
 ### 从官方 V2bX 迁移过来
@@ -106,7 +112,6 @@ wget -N https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh && bash 
 ### 手动安装
 
 [手动安装教程](https://v2bx.v-50.me/v2bx/v2bx-xia-zai-he-an-zhuang/install/manual)
-
 
 ## Web 管理面板
 
@@ -128,105 +133,30 @@ cd v3bx/panel && bash install.sh
 
 ## 断流修复
 
-老版本 V2bX 的「用着用着就断、过一会儿又好了」有两个明确根因，已在本分支修掉。改动参考了作者新项目 [wyx2685/v2node](https://github.com/wyx2685/v2node) 的做法。
+老版本「用着用着就断、过一会儿又好了」，在服务端这一侧有四个明确根因，本分支已全部修掉。修复思路参考作者新项目 [v2node](https://github.com/wyx2685/v2node)。
 
-### 1. 改限速 = 踢掉该用户所有连接
+| 问题 | 触发场景 | 症状 | 修复 |
+|---|---|---|---|
+| `compareUserList` 用 `uuid+SpeedLimit` 拼 key | 后台改用户限速 | 该用户全部连接被 `CloseAll` | 按 uuid 比对，限速变化走 `modified` 热更新 |
+| `ratelimit.Bucket` 绑死在连接上 | 改限速要生效 | 必须断连重建 | 换 `DynamicBucket`（`atomic.Value`），原地换桶 |
+| `LinkManager.CloseAll` 无锁遍历 map | 踢人 / 用户到期 | `fatal error`，**进程直接退出**，同机全节点掉线 | 加锁 + 快照 + `closed` 幂等 |
+| `Limiter.AliveList` 是普通 map | 定时任务替换 vs 新连接读 | `concurrent map read and write` | 加 `RWMutex`，统一走 setter |
 
-`node/user.go` 的 `compareUserList` 原来用 `uuid + SpeedLimit` 拼比对 key：
+其中第三条最要命：它不是 panic，`recover` 拦不住，一个用户被踢会让整台机器的所有节点一起掉线，日志里只留一行 `fatal error`。
 
-```go
-key := user.Uuid + strconv.Itoa(user.SpeedLimit)
-```
+完整的代码分析、复现步骤和回归测试见 **[docs/STREAM-FIX.md](./docs/STREAM-FIX.md)**。
 
-后果是：后台把某个用户的限速从 0 改成 100，这一条在比对里变成「删掉旧用户 + 新增一个用户」。删除路径会走到 `DelUsers`，里面 `lm.CloseAll()` 把这个用户的全部链路关掉 —— 用户正在下载的文件直接断，客户端重连后限速才生效。
-
-现在按 `uuid` 比对，限速/设备数变化单独归到 `modified`：
-
-```
-deleted  → 真删（用户被删/到期）
-added    → 真加
-modified → 只换限速桶、改设备数，连接不动
-```
-
-配套改了 `Limiter.UpdateUser`，新增 `modified` 参数；`node/task.go` 里 `added/deleted/modified` 任一非空才刷新 limiter。
-
-### 2. 限速桶是静态的，换速率必须重建连接
-
-`common/rate` 原来把 `*ratelimit.Bucket` 直接绑在 conn / writer 上。桶的速率在创建时就定死，想改只能换对象，而对象已经挂在活跃连接上 —— 只能断连接重建。
-
-现在换成 `DynamicBucket`（`atomic.Value` 持桶）：
-
-```go
-type DynamicBucket struct{ v atomic.Value }
-func (d *DynamicBucket) Update(rate int64) { d.v.Store(ratelimit.NewBucketWithQuantum(time.Second, rate, rate)) }
-```
-
-`Update` 原地换桶，已建立的连接下一次 `Wait` 就按新速率走，零中断。同时把 `CheckLimit` 里的 `LoadOrStore` 改成「先 Load 再建」——老写法每次连接都 `NewBucketWithQuantum` 分配一个满额桶，桶已存在时这个对象直接扔掉，高并发下纯属浪费。
-
-### 3. 踢人时进程直接崩（最严重）
-
-`core/xray/app/dispatcher/linkmanager.go` 的 `CloseAll` 是无锁遍历：
-
-```go
-func (m *LinkManager) CloseAll() {
-	for w, r := range m.links {   // 遍历
-		common.Close(w)           // → ManagedWriter.Close → RemoveWriter → delete(m.links, ...)
-		common.Interrupt(r)       //   边遍历边写 map
-	}
-}
-```
-
-Go 运行时对此的处理是 `fatal error: concurrent map iteration and map write`，**不是 panic，recover 拦不住，整个进程直接退出**。一个用户被踢，同一台机器上所有节点的所有连接一起掉。
-
-现在先把 map 换成空表做快照，再遍历快照，`closed` 标记保证幂等：
-
-```go
-m.mu.Lock()
-if m.closed { m.mu.Unlock(); return }
-m.closed = true
-links := m.links
-m.links = make(map[*ManagedWriter]buf.Reader)
-m.mu.Unlock()
-for w, r := range links { ... }
-```
-
-复现验证（`linkmanager_test.go`，8 协程建链 + 1 协程踢人）：
-
-```
-旧实现：fatal error: concurrent map iteration and map write   ← 进程退出
-新实现：PASS（-race 无告警）
-```
-
-### 4. 在线设备数快照的并发读写
-
-`Limiter.AliveList` 是普通 map：定时任务整体替换它，每个新连接读它做设备数判断。两者撞上就是 `concurrent map read and map write`。现在加了 `RWMutex`，读写都走 `SetAliveList` / `getAlive` / `deleteAlive`。
-
-### 顺手清掉的死参数
-
-`CheckLimit(taguuid, ip, isTcp, noSSUDP)` 里的 `isTcp` 在函数体里从头到尾没被用过，调用方却要为此算 `destination.Network == net.Network_TCP`。已删除，签名变成 `CheckLimit(taguuid, ip, noSSUDP)`。
-
-### 测试
-
-```bash
-GOEXPERIMENT=jsonv2 go test ./node/ -run TestCompareUserList -v
-GOEXPERIMENT=jsonv2 go test -race ./core/xray/app/dispatcher/ -run TestLinkManager -v
-```
-
-`TestCompareUserListSpeedLimitChange` 就是锁住「改限速不能判成增删」这条行为的回归测试。
+> 顺带说明：这里修的是**服务端进程内**的断流。如果你遇到的是「用几分钟就卡住、换个 IP 又好了」，那是客户端到入口的链路问题，跟代码无关，得靠优选 IP 或换入口解决。
 
 ## 特点
 
-* 永久开源且免费。
-* 支持Vmess/Vless, Trojan， Shadowsocks, Hysteria1/2多种协议。
-* 支持Vless和XTLS等新特性。
-* 支持单实例对接多节点，无需重复启动。
-* 支持限制在线IP。
-* 支持限制Tcp连接数。
-* 支持节点端口级别、用户级别限速。
-* 配置简单明了。
-* 修改配置自动重启实例。
-* 支持多种内核，易扩展。
-* 支持条件编译，可仅编译需要的内核。
+- 开源免费，MPL-2.0
+- 支持 Vmess / Vless / Trojan / Shadowsocks / Hysteria1&2
+- 支持 Vless 与 XTLS 新特性
+- 单实例对接多节点，无需重复启动
+- 在线 IP 限制、TCP 连接数限制、节点级 / 用户级限速
+- 多内核（xray / sing-box / hysteria2），支持条件编译，只编需要的内核
+- 修改配置自动重启实例
 
 ## 功能介绍
 
