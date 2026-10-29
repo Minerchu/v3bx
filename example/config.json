@@ -33,14 +33,16 @@
       "TCPFastOpen": false,
       "SniffEnabled": true,
       "CertConfig": {
-        "CertMode": "self",
+        "CertMode": "dns",
         "RejectUnknownSni": false,
-        "CertDomain": "example.com",
+        "CertDomain": "node.example.com",
         "CertFile": "/etc/V2bX/fullchain.cer",
         "KeyFile": "/etc/V2bX/cert.key",
+        "Email": "your-email@example.com",
         "Provider": "cloudflare",
         "DNSEnv": {
-          "EnvName": "env1"
+          "CLOUDFLARE_EMAIL": "your-cloudflare-email@example.com",
+          "CLOUDFLARE_API_KEY": "your-global-api-key"
         }
       }
     }
