@@ -1099,6 +1099,19 @@ async function probeNodeForm() {
 function onField(e) {
   const el = e.target;
   const n = S.editing;
+
+  /* data-env 的输入框（DNS 凭据）没有 data-f，必须在 data-f 的 early return
+     之前处理，否则用户填的 CF Token / API Key / 邮箱根本写不进 dnsEnv，
+     validate 永远报「缺凭据」，保存不了。 */
+  if (el.dataset.env) {
+    n.cert.dnsEnv = n.cert.dnsEnv || {};
+    const v = el.value;
+    if (v && v !== '••••••••') n.cert.dnsEnv[el.dataset.env] = v;
+    else if (!v) delete n.cert.dnsEnv[el.dataset.env]; /* 清空了就删掉，别留空字符串 */
+    setTimeout(validateForm, 0);
+    return;
+  }
+
   const k = el.dataset.f;
   if (!k) return;
   setTimeout(validateForm, 0);
@@ -1152,11 +1165,6 @@ function onField(e) {
       if (cf) cf.value = n.cert.certFile;
       if (kf) kf.value = n.cert.keyFile;
     }
-    return;
-  }
-  if (el.dataset.env) {
-    n.cert.dnsEnv = n.cert.dnsEnv || {};
-    if (v !== '••••••••') n.cert.dnsEnv[el.dataset.env] = v;
     return;
   }
   n[k] = v;

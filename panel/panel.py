@@ -1375,6 +1375,12 @@ class Store:
 
             for n in nodes:
                 resolve_creds(n)
+                # 补全 self 模式的证书路径：V2bX 的 requestCert() 对 self
+                # 也要求 CertFile / KeyFile 不为空（node/cert.go:55-56），
+                # 不补的话部署后 V2bX 会报 "cert file path or key file path
+                # not exist" 然后无限重启。validate_node 里也会调一次，
+                # 但 validate 不回写，build_v2bx 拿到的还是空路径。
+                normalize_cert(n)
 
             # ---- 1. 校验 ----
             # 只校验本次真正要写的那一侧。否则 sing-box 那边一个历史遗留的
