@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.log
+*.tar.gz
+.DS_Store
+.venv/
+dns-creds.json
+auth.json
+panel.env
+backups/
