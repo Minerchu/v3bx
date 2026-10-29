@@ -968,7 +968,11 @@ function renderForm() {
         }).join('') +
       '</select></div>');
       const pf = (S.meta.providerFields || {})[c.provider] || {groups: [], fields: {}};
-      const hasPool = !!(((S.meta.creds || {})[c.provider]) || {});
+      // 注意别写成 !!(((S.meta.creds||{})[c.provider]) || {})——后面那个 || {}
+      // 会让整个表达式恒为 true，凭据池空着也显示「已继承，无需填写」，
+      // 用户照着不填，一点申请就报「还缺凭据」。
+      const poolEntry = (S.meta.creds || {})[c.provider];
+      const hasPool = !!(poolEntry && Object.keys(poolEntry).length);
       H.push('<div class="tip">' +
         (hasPool
           ? '已从凭据池继承 <b>' + esc(pf.label || c.provider) + '</b> 的凭据（显示为掩码），无需重复填写。'
