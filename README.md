@@ -36,8 +36,12 @@
 **推荐：直接跑主安装脚本，面板会一起装上。**
 
 ```bash
-wget -N https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh && bash install.sh
+bash <(curl -fsSL -H "Accept: application/vnd.github.raw" \
+  "https://api.github.com/repos/Minerchu/v3bx/contents/install.sh?ref=main")
 ```
+
+> 走 API 直读而不是 `wget raw.githubusercontent.com`：raw 有 5 分钟 CDN 缓存，
+> 刚更新完面板就重装会拿到旧文件。这条命令每次都取最新版。
 
 脚本会问面板端口（默认 18080）、用户名、密码，装完把访问地址打给你。之后所有操作都在浏览器里，不用再 SSH。
 
