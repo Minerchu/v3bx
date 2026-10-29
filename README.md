@@ -2,7 +2,7 @@
 
 **V2board / Xboard 节点服务端**，支持 Vmess / Vless / Trojan / Shadowsocks / Hysteria1&2，单实例对接多节点。
 
-本仓库基于 [wyx2685/V2bX](https://github.com/wyx2685/V2bX)，在上游基础上做了三件事：**修断流、加面板、补 shadow-tls v3**。安装方式、配置文件格式、管理命令全部与上游一致，替换二进制即可。
+本仓库基于 [wyx2685/V2bX](https://github.com/wyx2685/V2bX)，在上游基础上做了四件事：**修断流、加面板、补 shadow-tls v3、按节点选出口**。安装方式、配置文件格式、管理命令全部与上游一致，替换二进制即可。
 
 [![Release](https://img.shields.io/github/v/release/Minerchu/v3bx?label=release&color=blue)](https://github.com/Minerchu/v3bx/releases)
 [![License](https://img.shields.io/badge/license-MPL--2.0-green)](./LICENSE)
@@ -14,11 +14,12 @@
 | 能力 | 上游 V2bX | 本项目 |
 |---|---|---|
 | **shadow-tls v3** | 需自行拼双层入站 | 面板插件选 `shadow-tls`、参数填 `host=...;password=...;version=3`，自动生成 shadowtls 外层 + shadowsocks 内层，用户/流量/心跳照旧 · [说明](./SHADOWTLS.md) |
+| **节点级出口** | 全机共用一个默认出站，改单个节点出口只能改代码 | 每个节点单独选「本地直连」或「SOCKS5（可带账号密码）」，xray / sing 都支持 · [说明](./OUTBOUND.md) |
 | **改限速** | 判定为「删用户 + 加用户」，踢掉该用户全部连接 | 按 uuid 比对，限速变化走热更新，连接不断 |
 | **踢人 / 用户到期** | 有概率 `fatal error`，**整进程退出**，同机全节点掉线 | 加锁 + 快照 + 幂等，只关目标链路 |
 | **加节点** | SSH 手改 `config.json`，写错一处整机全挂 | 装完自带 Web 面板，浏览器填表，写错当场拦住，改崩自动回滚 · [面板](./panel/) |
 
-> 三个改动都不涉及配置格式变更。从上游或官方版迁过来，直接跑安装命令即可，`/etc/V2bX/` 原样保留。
+> 断流修复、面板、shadow-tls 三项不涉及配置格式变更；节点级出口只是在节点配置里多了一个**可选**字段 `OutboundConfig`，不填就是原来的直连行为，老配置照用。从上游或官方版迁过来，直接跑安装命令即可，`/etc/V2bX/` 原样保留。
 
 **注意：本项目需要搭配[修改版 V2board](https://github.com/wyx2685/v2board)**
 
