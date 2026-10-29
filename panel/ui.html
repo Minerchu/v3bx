@@ -923,43 +923,43 @@ function renderForm() {
         '<button class="btn sm" id="btnIssue">' + (c.mode === 'self' ? '生成自签证书' : '检查证书文件') + '</button>' +
         '<span id="certStat" style="font-size:12px;color:var(--dim)">读取中…</span></div>');
     }
-    if (c.mode === 'dns' || c.mode === 'http') {
-      H.push('<div class="grid2">' +
-        '<div class="f"><label>邮箱（acme 注册用）</label><input data-f="certEmail" value="' + esc(c.email) + '" placeholder="you@example.com"></div>');
-      if (c.mode === 'dns') {
-        H.push('<div class="f"><label>DNS 服务商</label><select data-f="certProvider">' +
-          S.meta.providers.map(p => {
-            const pf = (S.meta.providerFields || {})[p] || {};
-            const lbl = pf.label || p;
-            return '<option value="' + p + '"' + (c.provider===p?' selected':'') + '>' + esc(lbl) + '</option>';
-          }).join('') +
-        '</select></div>');
-      }
-      H.push('</div>');
-      if (c.mode === 'dns') {
-        const pf = (S.meta.providerFields || {})[c.provider] || {groups: [], fields: {}};
-        const hasPool = !!(((S.meta.creds || {})[c.provider]) || {});
-        H.push('<div class="tip">' +
-          (hasPool
-            ? '已从凭据池继承 <b>' + esc(pf.label || c.provider) + '</b> 的凭据（显示为掩码），无需重复填写。'
-            : '申请证书需要 <b>' + esc(pf.label || c.provider) + '</b> 的 API 凭据，填一次后会自动记入凭据池，后续新节点直接复用。') +
-          '这些值会写进 config.json 的 <code>DNSEnv</code>，V2bX 启动时也会用它续期。</div>');
-        (pf.groups || []).forEach(gr => {
-          H.push('<div style="margin-bottom:12px">');
-          if (gr.title) H.push('<div style="font-size:12px;color:var(--txt);margin-bottom:6px">' + gr.title + '</div>');
-          H.push('<div class="grid2">');
-          (gr.keys || []).forEach(k => {
-            const fd = (pf.fields || {})[k] || {label: k, ph: ''};
-            const v = (c.dnsEnv && c.dnsEnv[k]) || '';
-            H.push('<div class="f"><label>' + esc(fd.label) + '</label>' +
-              '<input data-env="' + esc(k) + '"' + (fd.plain ? '' : ' type="password"') +
-              ' value="' + (v ? '••••••••' : '') + '" placeholder="' + esc(fd.ph || '') + '"></div>');
-          });
-          H.push('</div>');
-          if (gr.hint) H.push('<div class="hint" style="margin-top:-4px">' + gr.hint + '</div>');
-          H.push('</div>');
+    if (c.mode === 'http') {
+      H.push('<div class="f"><label>邮箱（acme 注册用）</label><input data-f="certEmail" value="' + esc(c.email) + '" placeholder="you@example.com">' +
+        '<div class="hint">用于 acme.sh 注册 Let\'s Encrypt 账号，不填也行</div></div>');
+    }
+    if (c.mode === 'dns') {
+      H.push('<div class="f"><label>DNS 服务商</label><select data-f="certProvider">' +
+        S.meta.providers.map(p => {
+          const pf = (S.meta.providerFields || {})[p] || {};
+          const lbl = pf.label || p;
+          return '<option value="' + p + '"' + (c.provider===p?' selected':'') + '>' + esc(lbl) + '</option>';
+        }).join('') +
+      '</select></div>');
+      const pf = (S.meta.providerFields || {})[c.provider] || {groups: [], fields: {}};
+      const hasPool = !!(((S.meta.creds || {})[c.provider]) || {});
+      H.push('<div class="tip">' +
+        (hasPool
+          ? '已从凭据池继承 <b>' + esc(pf.label || c.provider) + '</b> 的凭据（显示为掩码），无需重复填写。'
+          : '申请证书需要 <b>' + esc(pf.label || c.provider) + '</b> 的 API 凭据，填一次后会自动记入凭据池，后续新节点直接复用。') +
+        '这些值会写进 config.json 的 <code>DNSEnv</code>，V2bX 启动时也会用它续期。</div>');
+      (pf.groups || []).forEach((gr, gi) => {
+        H.push('<div style="margin-bottom:12px">');
+        if (gr.title) H.push('<div style="font-size:12px;color:var(--txt);margin-bottom:6px;font-weight:600">' +
+          (pf.groups.length > 1 ? '方式 ' + ['一','二','三','四'][gi] + '：' : '') + gr.title + '</div>');
+        H.push('<div class="grid2">');
+        (gr.keys || []).forEach(k => {
+          const fd = (pf.fields || {})[k] || {label: k, ph: ''};
+          const v = (c.dnsEnv && c.dnsEnv[k]) || '';
+          H.push('<div class="f"><label>' + esc(fd.label) + '</label>' +
+            '<input data-env="' + esc(k) + '"' + (fd.plain ? '' : ' type="password"') +
+            ' value="' + (v ? '••••••••' : '') + '" placeholder="' + esc(fd.ph || '') + '"></div>');
         });
-      }
+        H.push('</div>');
+        if (gr.hint) H.push('<div class="hint" style="margin-top:-4px">' + gr.hint + '</div>');
+        H.push('</div>');
+      });
+    }
+    if (c.mode === 'dns' || c.mode === 'http') {
       H.push('<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">' +
         '<button class="btn sm" id="btnIssue">立即申请证书</button>' +
         '<span id="certStat" style="font-size:12px;color:var(--dim)">读取中…</span></div>');
@@ -1265,11 +1265,14 @@ async function doIssue() {
       toast(isSelf ? '自签证书已生成' : '证书签发成功', 'ok');
     } else if (r.delegated) {
       // 没装 acme.sh —— 不是错误，V2bX 启动时会自己签
-      showResult('交给 V2bX 自动申请', [
-        {name: 'acme.sh', ok: false, detail: '未安装'},
+      showResult('证书会在部署时自动签发', [
+        {name: 'acme.sh', ok: false, detail: '未安装（不影响）'},
         {name: 'V2bX 内置 lego', ok: true, detail: '部署时自动申请'},
-      ], '<pre class="log">' + esc(r.log || '') + '</pre>', []);
-      toast('没装 acme.sh，点「部署」由 V2bX 自己签', 'ok');
+      ], '<div class="tip" style="margin-bottom:12px">这台机器没装 acme.sh，<b>不需要装</b>。' +
+        '直接点「保存」再点「部署到服务器」，V2bX 启动时会用内置 lego 按上面的 DNS 凭据自动签证书。' +
+        '签完去日志页看到 <code>obtain certificate</code> 就是成功了。</div>' +
+        '<pre class="log">' + esc(r.log || '') + '</pre>', []);
+      toast('没装 acme.sh 不影响：点「部署」由 V2bX 自己签', 'ok');
     } else {
       showResult(isSelf ? '生成自签证书失败' : '证书申请失败',
                  [{name: isSelf ? 'openssl' : 'acme.sh', ok: false, detail: '失败'}],
