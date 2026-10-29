@@ -274,6 +274,9 @@ pre.log .g{color:var(--ok)}
         <h2>节点 <span class="cnt" id="cnCnt">0</span></h2>
         <button class="btn sm" id="btnConnAdd">+ 添加节点</button>
       </div>
+      <div id="cnTpl" style="display:none;margin:-4px 0 12px;padding:9px 12px;
+           border-radius:7px;background:rgba(210,153,34,.1);
+           border:1px solid rgba(210,153,34,.35);color:var(--warn);font-size:12.5px"></div>
       <div class="hint" style="margin:-10px 0 12px;font-size:12px;color:var(--dim2);line-height:1.6">
         ID 对应面板「节点管理」列表里的 ID。端口、密码、协议参数全部由面板下发，这里只声明这台机器跑哪几个节点。
       </div>
@@ -1176,6 +1179,18 @@ async function loadConnect() {
     $('#cnCore').value = d.core || 'sing';
     CONN.nodes = (d.nodes || []).map(n => ({nodeId: n.nodeId, nodeType: n.nodeType}));
     renderConnNodes();
+
+    // 安装包自带的示例节点（NodeID 33 / ApiKey test / 127.0.0.1）已被后端过滤，
+    // 这里告诉用户一声，免得以为是配置丢了
+    const tpl = d.templateIgnored || 0;
+    const tplBox = $('#cnTpl');
+    if (tpl > 0) {
+      tplBox.style.display = '';
+      tplBox.textContent = '已忽略 ' + tpl + ' 个安装包自带的示例节点（NodeID 33 / ApiKey test / 127.0.0.1）。'
+        + '它不是真实节点，点一次「保存并重启」就会从 config.json 里清掉。';
+    } else {
+      tplBox.style.display = 'none';
+    }
 
     const s = d.service || {};
     const LABEL = {active:'运行中', inactive:'未运行', failed:'启动失败',

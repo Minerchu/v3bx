@@ -499,9 +499,27 @@ def blank_node(owner='v2bx', node_type='vless'):
         'stlsPassword': '',
     }
 
+def is_template_node(nd):
+    """安装包自带的示例节点。
+
+    上游的 config.json 模板里写了一个 NodeID 33 / NodeType shadowsocks /
+    ApiHost http://127.0.0.1 / ApiKey test / 自签 example.com 的假节点。
+    老版本 install.sh 直接把这个模板拷进 /etc/V2bX/，于是面板一打开就
+    多出一个"默认节点"。三个特征同时命中才判定，避免误伤真实配置。
+    """
+    host = (nd.get('ApiHost') or '').strip().lower()
+    return (
+        nd.get('NodeID') == 33
+        and (nd.get('ApiKey') or '') == 'test'
+        and ('127.0.0.1' in host or 'localhost' in host)
+    )
+
+
 def parse_v2bx_nodes(cfg):
     nodes = []
     for nd in cfg.get('Nodes', []):
+        if is_template_node(nd):
+            continue
         nt = nd.get('NodeType', 'vless')
         n = blank_node('v2bx', nt)
         n['nodeId'] = nd.get('NodeID', 0)
@@ -1190,8 +1208,11 @@ def read_connect():
             core = c['Type']
             break
 
+    raw_nodes = cfg.get('Nodes') or []
+    real_nodes = [nd for nd in raw_nodes if not is_template_node(nd)]
+
     host, has_key = '', False
-    for nd in cfg.get('Nodes') or []:
+    for nd in real_nodes:
         if nd.get('ApiHost'):
             host = nd['ApiHost']
             has_key = bool(nd.get('ApiKey'))
@@ -1205,9 +1226,10 @@ def read_connect():
         'configExists': True,
         'path': str(V2BX_CONFIG),
         'service': svc_status(V2BX_SERVICE),
+        'templateIgnored': len(raw_nodes) - len(real_nodes),
         'nodes': [{'nodeId': nd.get('NodeID', 0),
                    'nodeType': nd.get('NodeType', 'vless'),
-                   'core': nd.get('Core', core)} for nd in cfg.get('Nodes') or []],
+                   'core': nd.get('Core', core)} for nd in real_nodes],
     }
 
 

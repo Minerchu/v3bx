@@ -339,9 +339,35 @@ EOF
     fi
 
     if [[ ! -f /etc/V2bX/config.json ]]; then
-        cp config.json /etc/V2bX/
+        # 不直接拷安装包里的 config.json：那份是上游的示例配置，Nodes 里带着
+        # 一个假的 NodeID 33（ApiHost 127.0.0.1 / ApiKey test / 自签 example.com）。
+        # 拷过去 V2bX 会一直连不上它刷错误日志，面板里也会显示成一个"默认节点"。
+        cat > /etc/V2bX/config.json <<'EMPTYCFG'
+{
+  "Log": {
+    "Level": "info",
+    "Output": ""
+  },
+  "Cores": [
+    {
+      "Type": "sing",
+      "Log": {
+        "Level": "info",
+        "Timestamp": true
+      },
+      "NTP": {
+        "Enable": false,
+        "Server": "time.apple.com",
+        "ServerPort": 0
+      },
+      "OriginalPath": "/etc/V2bX/sing_origin.json"
+    }
+  ],
+  "Nodes": []
+}
+EMPTYCFG
         echo -e ""
-        echo -e "全新安装：配置文件已就位，接下来装 Web 面板，在浏览器里完成对接"
+        echo -e "全新安装：已生成空配置（无节点），接下来装 Web 面板，在浏览器里完成对接"
         first_install=true
     else
         if [[ x"${release}" == x"alpine" ]]; then
