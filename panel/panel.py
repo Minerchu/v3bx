@@ -20,6 +20,7 @@ import ssl
 import sys
 import json
 import time
+import socket
 import hmac
 import base64
 import shutil
@@ -390,6 +391,205 @@ def listen_ports():
     return res
 
 # ============================================================
+# IPv6 能力检测
+# ============================================================
+#
+# 为什么需要：V2bX 默认把节点监听在 `::`，出站（freedom / sing direct）交给
+# 系统解析器时，DNS 返回 AAAA 就先试 IPv6。机器根本没有 IPv6 出口时，每条
+# 连接都要先吃一个 "network is unreachable"（实测 0.25~1.5s）才回落 IPv4，
+# 症状就是「能连但很卡 / 时断时续」。
+#
+# 所以先真实探一次能不能出网：
+#   - 能  -> 保持双栈（prefer_ipv4，v6 可用但排在 v4 后面，避免 v6 路由质量差时更慢）
+#   - 不能 -> 域名解析钉死 ipv4_only，监听地址从 `::` 退回 `0.0.0.0`
+#            （内核禁用 IPv6 模块时 bind `::` 会直接失败，节点起不来）
+
+IPV6_FILE    = PANEL_DIR / 'ipv6.json'
+IPV6_TTL     = 300
+IPV6_TARGETS = [('2606:4700:4700::1111', 443),   # Cloudflare
+                ('2001:4860:4860::8888', 443),   # Google
+                ('2620:fe::fe', 443)]            # Quad9
+_ipv6_cache  = {'ts': 0.0, 'res': None}
+
+
+def ipv6_addrs():
+    """本机可用于出网的 IPv6 地址。
+
+    只认全球单播 2000::/3：
+      - fe80::  链路本地，出不了网
+      - fc00::/7  ULA（相当于 IPv4 的 192.168.x），同样出不了网
+    实测有机器只挂了个 fd00:dead:beef::1 这种，看起来「有 v6」其实没有，
+    列表里摆出来只会误导。
+    """
+    out = []
+    try:
+        text = Path('/proc/net/if_inet6').read_text()
+    except Exception:
+        return out
+    for line in text.splitlines():
+        f = line.split()
+        if len(f) < 6:
+            continue
+        hexaddr, scope, name = f[0], f[3], f[5]
+        if name == 'lo' or scope == '20':        # 0x20 = link-local
+            continue
+        if hexaddr[0] not in '23':               # 2000::/3
+            continue
+        try:
+            out.append(socket.inet_ntop(socket.AF_INET6, bytes.fromhex(hexaddr)))
+        except Exception:
+            pass
+    return out
+
+
+def _v6_connect(host, port, timeout=2.0):
+    s = None
+    try:
+        s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        s.connect((host, port))
+        return True, ''
+    except Exception as e:
+        return False, f'{type(e).__name__}: {e}'
+    finally:
+        if s is not None:
+            try:
+                s.close()
+            except Exception:
+                pass
+
+
+def ipv6_probe():
+    """真实探测：有全局地址 + 能连出去，才算「有 IPv6」。"""
+    res = {'ok': False, 'addrs': ipv6_addrs(), 'route': False,
+           'target': '', 'detail': '', 'ts': int(time.time())}
+    if not res['addrs']:
+        res['detail'] = '本机没有全局 IPv6 地址'
+        return res
+
+    code, out = run(['ip', '-6', 'route', 'show', 'default'], timeout=5)
+    res['route'] = bool(code == 0 and (out or '').strip())
+
+    last_err = ''
+    for host, port in IPV6_TARGETS:
+        ok, err = _v6_connect(host, port)
+        if ok:
+            res.update(ok=True, target=f'[{host}]:{port}',
+                       detail=f'可出网（{host}:{port} 握手成功）')
+            return res
+        last_err = err
+
+    hint = '有默认路由但外连失败' if res['route'] else '没有 IPv6 默认路由'
+    res['detail'] = f'{hint}：{last_err or "全部目标不可达"}'
+    return res
+
+
+def ipv6_mode():
+    try:
+        m = (json.loads(IPV6_FILE.read_text()) or {}).get('mode', 'auto')
+    except Exception:
+        m = 'auto'
+    return m if m in ('auto', 'on', 'off') else 'auto'
+
+
+def set_ipv6_mode(mode):
+    if mode not in ('auto', 'on', 'off'):
+        raise ValueError('mode 只能是 auto / on / off')
+    ensure_dirs()
+    tmp = IPV6_FILE.with_name('ipv6.json.tmp')
+    tmp.write_text(json.dumps({'mode': mode}, indent=2))
+    os.replace(tmp, IPV6_FILE)
+    return ipv6_state()
+
+
+def ipv6_state(force=False):
+    now = time.time()
+    if force or _ipv6_cache['res'] is None or now - _ipv6_cache['ts'] > IPV6_TTL:
+        _ipv6_cache['res'] = ipv6_probe()
+        _ipv6_cache['ts'] = now
+    det = dict(_ipv6_cache['res'])
+    mode = ipv6_mode()
+    if mode == 'on':
+        enabled, why = True, '手动启用'
+    elif mode == 'off':
+        enabled, why = False, '手动关闭'
+    else:
+        enabled, why = bool(det['ok']), '自动检测'
+    return {'mode': mode, 'enabled': enabled, 'why': why,
+            'detected': det, 'age': int(now - _ipv6_cache['ts'])}
+
+
+def ipv6_enabled():
+    """配置渲染时用这个，只取布尔值。"""
+    try:
+        return bool(ipv6_state()['enabled'])
+    except Exception:
+        return True     # 探测炸了就按「有」处理，别把 IPv6 用户误伤成单栈
+
+
+SING_ORIGIN = Path(os.environ.get('SING_ORIGIN', '/etc/V2bX/sing_origin.json'))
+
+
+def _sing_origin_skeleton(ds):
+    """最小可用模板：一条直连、一条阻断，私有地址不往外走。
+    不带任何去广告/正则规则——那些是用户自己的策略，面板不该凭空塞。"""
+    return {
+        'dns': {'servers': [{'tag': 'cf', 'address': '1.1.1.1', 'strategy': ds}]},
+        'outbounds': [{'tag': 'direct', 'type': 'direct', 'domain_strategy': ds},
+                      {'tag': 'block', 'type': 'block'}],
+        'route': {'rules': [{'ip_is_private': True, 'outbound': 'block'},
+                            {'outbound': 'direct', 'network': ['udp', 'tcp']}]},
+        'experimental': {'cache_file': {'enabled': True}},
+    }
+
+
+def ensure_sing_origin(v6):
+    """V2bX 的 sing 内核会读 OriginalPath，文件不存在就直接启动失败
+    （core/sing/sing.go:55 `read original config error`）。
+    安装脚本以前 cp 的是 example/sing_origin.json，而仓库里根本没这个文件，
+    新机首装必然踩空。这里兜底创建，并顺手把出站/解析的域名策略钉死。"""
+    ds = 'prefer_ipv4' if v6 else 'ipv4_only'
+    existed = SING_ORIGIN.exists()
+    cfg = None
+    if existed:
+        try:
+            cfg = json.loads(SING_ORIGIN.read_text())
+        except Exception:
+            cfg = None
+
+    if not isinstance(cfg, dict) or not cfg:
+        # 文件缺失 / 内容坏了：直接给一份完整骨架，别指望往空 dict 里补字段
+        SING_ORIGIN.parent.mkdir(parents=True, exist_ok=True)
+        SING_ORIGIN.write_text(json.dumps(_sing_origin_skeleton(ds), indent=2, ensure_ascii=False))
+        return True
+
+    changed = False
+    obs = cfg.get('outbounds')
+    if not isinstance(obs, list) or not obs:
+        cfg['outbounds'] = _sing_origin_skeleton(ds)['outbounds']
+        changed = True
+    else:
+        if not any(isinstance(o, dict) and o.get('tag') == 'direct' for o in obs):
+            obs.append({'type': 'direct', 'tag': 'direct', 'domain_strategy': ds})
+            changed = True
+        for o in obs:
+            if isinstance(o, dict) and o.get('type') == 'direct' and o.get('domain_strategy') != ds:
+                o['domain_strategy'] = ds
+                changed = True
+
+    dns = cfg.get('dns')
+    if isinstance(dns, dict) and isinstance(dns.get('servers'), list):
+        for s in dns['servers']:
+            if isinstance(s, dict) and s.get('strategy') != ds:
+                s['strategy'] = ds
+                changed = True
+
+    if changed:
+        SING_ORIGIN.parent.mkdir(parents=True, exist_ok=True)
+        SING_ORIGIN.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+    return changed
+
+# ============================================================
 # DNS 凭据池
 # ============================================================
 
@@ -608,7 +808,11 @@ def parse_singbox_nodes(cfg):
         nodes.append(n)
     return nodes
 
-def render_v2bx_node(n, g):
+def render_v2bx_node(n, g, ipv6=True):
+    lip = n.get('listenIP') or '::'
+    if not ipv6 and lip in ('::', '[::]'):
+        # 系统禁用 IPv6 时 bind `::` 直接 EAFNOSUPPORT，节点起不来
+        lip = '0.0.0.0'
     o = {
         'Core': n['core'],
         'ApiHost': g.get('apiHost', ''),
@@ -616,13 +820,24 @@ def render_v2bx_node(n, g):
         'NodeID': int(n['nodeId']),
         'NodeType': n['nodeType'],
         'Timeout': 30,
-        'ListenIP': n.get('listenIP') or '::',
+        'ListenIP': lip,
         'SendIP': '0.0.0.0',
         'DeviceOnlineMinTraffic': 200,
         'MinReportTraffic': 0,
         'TCPFastOpen': True,
         'SniffEnabled': True,
     }
+    # 出站域名策略：
+    #   xray —— freedom 的 DomainStrategy 只在 EnableDNS=true 时才生效
+    #           （core/xray/outbound.go:26），UseIPv4 = 只解析 A 记录
+    #   sing —— 真正的开关在 sing_origin.json 的 outbound/dns，见 ensure_sing_origin()；
+    #           这里写一份同值，方便别人看配置就知道意图
+    if n['core'] == 'xray':
+        o['XrayOptions'] = {'EnableDNS': True,
+                            'DNSType': 'UseIP' if ipv6 else 'UseIPv4'}
+    else:
+        o['SingOptions'] = {'EnableDNS': True,
+                            'DomainStrategy': 'prefer_ipv4' if ipv6 else 'ipv4_only'}
     c = n.get('cert') or {}
     if c.get('mode') and c['mode'] != 'none':
         o['CertConfig'] = {
@@ -637,11 +852,13 @@ def render_v2bx_node(n, g):
         }
     return o
 
-def render_singbox_inbounds(n):
+def render_singbox_inbounds(n, ipv6=True):
     """一个节点 -> 一个或多个 inbound"""
     t = n['nodeType']
     port = int(n.get('listenPort') or 0)
     ip = n.get('listenIP') or '0.0.0.0'
+    if not ipv6 and ip in ('::', '[::]'):
+        ip = '0.0.0.0'
     tls = None
     c = n.get('cert') or {}
     if c.get('mode') and c['mode'] != 'none':
@@ -963,7 +1180,7 @@ class Store:
         return nodes, self.global_cfg(v2bx_cfg)
 
     # ---------- 渲染 ----------
-    def build_v2bx(self, nodes, g, old_cfg):
+    def build_v2bx(self, nodes, g, old_cfg, ipv6=None):
         core = g.get('core', 'sing')
         if core not in ('xray', 'sing'):
             core = 'sing'
@@ -978,7 +1195,8 @@ class Store:
         gg = dict(g)
         if gg.get('apiKey') == MASK:
             gg['apiKey'] = self._old_api_key(old_cfg)
-        cfg['Nodes'] = [render_v2bx_node(n, gg) for n in nodes if n.get('owner') == 'v2bx']
+        v6 = ipv6_enabled() if ipv6 is None else ipv6
+        cfg['Nodes'] = [render_v2bx_node(n, gg, v6) for n in nodes if n.get('owner') == 'v2bx']
         return cfg
 
     def _old_api_key(self, old_cfg):
@@ -987,7 +1205,8 @@ class Store:
                 return nd['ApiKey']
         return ''
 
-    def build_singbox(self, nodes, old_cfg):
+    def build_singbox(self, nodes, old_cfg, ipv6=None):
+        v6 = ipv6_enabled() if ipv6 is None else ipv6
         cfg = dict(old_cfg) if old_cfg else {}
         cfg.setdefault('log', {'level': 'warn', 'timestamp': True})
         inbounds = []
@@ -995,18 +1214,28 @@ class Store:
             if n.get('owner') != 'singbox':
                 continue
             # 保留原有 users（由同步脚本维护，面板不碰）
-            for ib in render_singbox_inbounds(n):
+            for ib in render_singbox_inbounds(n, v6):
                 old = self._find_old_inbound(old_cfg, ib)
                 if old and old.get('users') and not ib.get('users'):
                     ib['users'] = old['users']
                 inbounds.append(ib)
         cfg['inbounds'] = inbounds
-        if 'outbounds' not in cfg:
+        # dict(old_cfg) 是浅拷贝，outbounds 列表还是同一个对象。下面要改
+        # domain_strategy，先复制一份，否则会把调用方手里的 old_cfg 一起改掉
+        # （回滚/对比时会看到莫名其妙的差异）。
+        if not isinstance(cfg.get('outbounds'), list):
             cfg['outbounds'] = [{'type': 'direct', 'tag': 'direct'}]
-        tags = {o.get('tag') for o in cfg['outbounds']}
+        cfg['outbounds'] = [dict(o) if isinstance(o, dict) else o for o in cfg['outbounds']]
+        tags = {o.get('tag') for o in cfg['outbounds'] if isinstance(o, dict)}
         if 'direct' not in tags:
             cfg['outbounds'].append({'type': 'direct', 'tag': 'direct'})
             tags.add('direct')
+        # 出站域名策略：没有 IPv6 出口就钉死 ipv4_only，否则每条连接都要先
+        # 吃一个 unreachable 再回落
+        ds = 'prefer_ipv4' if v6 else 'ipv4_only'
+        for o in cfg['outbounds']:
+            if isinstance(o, dict) and o.get('type') == 'direct':
+                o['domain_strategy'] = ds
         # handshake 的 detour 必须指向真实存在的 outbound，否则 sing-box 启动即报错
         for ib in inbounds:
             hs = ib.get('handshake')
@@ -1063,9 +1292,10 @@ class Store:
             steps.append({'name': '配置校验', 'ok': True, 'detail': f'{len(scope)} 个节点通过'})
 
             # ---- 2. 生成新配置 ----
+            v6 = ipv6_enabled()
             try:
-                new_v2bx = self.build_v2bx(nodes, g, old_v2bx) if target in ('all', 'v2bx') else old_v2bx
-                new_sb = self.build_singbox(nodes, old_sb) if target in ('all', 'singbox') else old_sb
+                new_v2bx = self.build_v2bx(nodes, g, old_v2bx, v6) if target in ('all', 'v2bx') else old_v2bx
+                new_sb = self.build_singbox(nodes, old_sb, v6) if target in ('all', 'singbox') else old_sb
             except Exception as e:
                 return {'ok': False, 'stage': 'render', 'errors': [
                     {'level': 'error', 'field': '', 'msg': f'生成配置失败: {e}'}], 'steps': steps}
@@ -1103,6 +1333,19 @@ class Store:
                 made.append(f'{domain}（{info["state"]}）')
             if made:
                 steps.append({'name': '生成自签证书', 'ok': True, 'detail': '、'.join(made)})
+
+            # ---- 3.6 sing 内核模板 ----
+            # V2bX 的 sing 内核读 OriginalPath，文件不存在直接启动失败
+            # （core/sing/sing.go:55 read original config error）。安装脚本一直
+            # 想 cp example/sing_origin.json，但仓库里根本没这个文件，新机必踩空。
+            # 这里兜底创建，同时把出站/解析的域名策略按 IPv6 能力钉死。
+            if target in ('all', 'v2bx') and g.get('core', 'sing') == 'sing':
+                if SING_ORIGIN.exists():
+                    backup_file(SING_ORIGIN, 'singorigin')
+                changed = ensure_sing_origin(v6)
+                steps.append({'name': 'sing 内核模板', 'ok': True,
+                              'detail': ('出站域名策略 → ' + ('prefer_ipv4（双栈）' if v6 else 'ipv4_only（本机无 IPv6）'))
+                                        if changed else '无需改动'})
 
             # ---- 4. 写临时文件并做语法/语义校验 ----
             tmp_v2bx = V2BX_CONFIG.with_suffix('.json.tmp')
@@ -1802,6 +2045,11 @@ class Handler(BaseHTTPRequestHandler):
                 },
             })
 
+        if p == '/api/ipv6':
+            q = parse_qs(urlparse(self.path).query)
+            force = (q.get('force') or ['0'])[0] in ('1', 'true', 'yes')
+            return self._json(ipv6_state(force=force))
+
         if p == '/api/state':
             nodes, g = store.load_all()
             return self._json({
@@ -1812,6 +2060,7 @@ class Handler(BaseHTTPRequestHandler):
                     'singbox': svc_status(SINGBOX_SERVICE),
                 },
                 'ports': store.current_ports(),
+                'ipv6': ipv6_state(),
                 'time': now_str(),
             })
 
@@ -1920,6 +2169,13 @@ class Handler(BaseHTTPRequestHandler):
                            b.get('provider', 'cloudflare'), b.get('dnsEnv') or {},
                            b.get('email', ''), b.get('outDir') or '', b.get('node'))
             return self._json(r)
+
+        if p == '/api/ipv6':
+            b = self._body() or {}
+            try:
+                return self._json({'ok': True, 'ipv6': set_ipv6_mode(b.get('mode') or 'auto')})
+            except ValueError as e:
+                return self._err(str(e))
 
         if p == '/api/connect/test':
             b = self._body() or {}

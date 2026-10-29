@@ -110,6 +110,8 @@ wget -N https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh && bash 
 
 部署走事务：备份 → 校验 → 补证书 → 原子替换 → 重启 → 两次确认 → 失败自动回滚并回显错误行。改崩了不会把机器搞挂。
 
+部署前会探一次本机能不能真的出网 IPv6：没有就把监听地址从 `::` 退回 `0.0.0.0`、域名解析钉死 `ipv4_only`，省掉每条连接先吃一次 `network is unreachable` 再回落的 0.25~1.5 秒；有就保持双栈。节点页顶部能看探测结果，也能手动强制开/关。
+
 零依赖（Python 3 标准库）、单进程、systemd 托管，与二进制完全解耦。详见 [panel/README.md](./panel/README.md)。
 
 不想装面板？安装时回答 `n` 即可，之后用 `v3bx panel install` 补装。

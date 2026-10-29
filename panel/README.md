@@ -143,7 +143,32 @@ V2bX 错误行
 
 **凭据只需填一次**——会存进 `/etc/v2bx-panel/dns-creds.json`（600 权限），之后新建节点自动继承，界面上显示为掩码。掩码不会被当成真凭据发出去，后端会从池子里取真值。
 
-### 5. 日志和备份
+### 5. IPv6：有就用，没有就不碰
+
+没有 IPv6 出口的机器，内核每建一条连接都要先试一次 IPv6、吃一个 `network is unreachable` 再回落 IPv4——单条 0.25~1.5 秒，表现出来就是「能连但很卡」「时断时续」。
+
+面板会在节点页顶部做一次真实探测，不是看有没有地址，而是**真的去连**（Cloudflare / Google / Quad9 的 443，2 秒超时，三个里通一个就算有）：
+
+| 探测结果 | 监听地址 | 域名解析策略 |
+|---|---|---|
+| 有 IPv6 | `::`（双栈，v4/v6 都收） | `prefer_ipv4` —— v6 可用但排在 v4 后面，避免 v6 路由质量差时反而更慢 |
+| 没有 | `0.0.0.0` | `ipv4_only` —— 彻底不解析 AAAA |
+
+监听地址这一步别省：系统禁用 IPv6 模块时 bind `::` 直接 `EAFNOSUPPORT`，节点起不来。
+
+只认全球单播 `2000::/3`。`fe80::` 是链路本地、`fc00::/7` 是 ULA（相当于内网 192.168），都出不了网——有些机器只挂了个 `fd00:dead:beef::1`，看着像「有 v6」其实没有。
+
+结果缓存 5 分钟，可以点「重测」强制刷新，也可以手动切成强制开/强制关。
+
+落到配置上是三处：
+
+- `config.json` → 节点 `ListenIP`
+- `config.json` → `XrayOptions.DNSType`（xray 内核；`UseIPv4` 只在 `EnableDNS: true` 时生效）
+- `/etc/V2bX/sing_origin.json` → `outbounds[direct].domain_strategy` 与 `dns.servers[].strategy`（sing 内核真正读这个文件）
+
+顺带补了个坑：这个文件以前没人创建，而 `config.json` 的 `Cores[].OriginalPath` 指着它，**新机首装必挂**（`read original config error`）。现在安装脚本会生成，面板部署时也会兜底补齐。
+
+### 6. 日志和备份
 
 - **日志页**：直接看 `journalctl -u V2bX` / `sing-shadowtls`，自动高亮错误行，顶部汇总「发现 N 条错误，最新一条：xxx」
 - **备份页**：列历史备份，可一键回滚到任意版本（回滚前会再备份当前配置）
@@ -254,6 +279,7 @@ cat /etc/v2bx-panel/INITIAL_PASSWORD.txt
 | `/etc/v2bx-panel/panel.env` | 端口、账号配置 |
 | `/etc/v2bx-panel/auth.json` | 密码哈希（600） |
 | `/etc/v2bx-panel/dns-creds.json` | DNS 服务商凭据池（600） |
+| `/etc/v2bx-panel/ipv6.json` | IPv6 策略（auto / on / off） |
 | `/etc/v2bx-panel/backups/` | 配置备份，保留 30 天 |
 
 ## 卸载

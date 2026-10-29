@@ -387,11 +387,44 @@ EMPTYCFG
     fi
 
     # 配置文件：已存在的不覆盖，缺失的补上
-    for f in dns.json route.json custom_outbound.json custom_inbound.json sing_origin.json; do
+    for f in dns.json route.json custom_outbound.json custom_inbound.json; do
         if [[ ! -f /etc/V2bX/${f} ]]; then
             cp ${f} /etc/V2bX/ 2>/dev/null || true
         fi
     done
+
+    # sing 内核模板：V2bX 启动时会读 Cores[].OriginalPath，文件不存在直接报
+    # "read original config error" 然后无限重启。仓库里没有 example/sing_origin.json，
+    # 原来那句 cp 永远是空转，新机首装必踩空，所以这里直接生成。
+    # 域名策略按本机有没有 IPv6 出口决定：没有就钉死 ipv4_only，省掉每条连接
+    # 先试一次 IPv6 再回落的 0.2~1.5s 白等。
+    if [[ ! -f /etc/V2bX/sing_origin.json ]]; then
+        _v6ds="ipv4_only"
+        if ip -6 route show default 2>/dev/null | grep -q "default"; then
+            _v6ds="prefer_ipv4"
+        fi
+        cat > /etc/V2bX/sing_origin.json <<SINGORIGIN
+{
+  "dns": {
+    "servers": [
+      { "tag": "cf", "address": "1.1.1.1", "strategy": "${_v6ds}" }
+    ]
+  },
+  "outbounds": [
+    { "tag": "direct", "type": "direct", "domain_strategy": "${_v6ds}" },
+    { "tag": "block", "type": "block" }
+  ],
+  "route": {
+    "rules": [
+      { "ip_is_private": true, "outbound": "block" },
+      { "outbound": "direct", "network": ["udp", "tcp"] }
+    ]
+  },
+  "experimental": { "cache_file": { "enabled": true } }
+}
+SINGORIGIN
+        echo -e "已生成 sing 内核模板（出站域名策略：${_v6ds}）"
+    fi
 
     curl -o /usr/bin/V2bX -Ls ${SCRIPT_URL}/V2bX.sh
     chmod +x /usr/bin/V2bX

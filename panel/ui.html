@@ -324,6 +324,16 @@ pre.log .g{color:var(--ok)}
               <option value="debug">日志 debug</option>
             </select>
           </div>
+          <div class="f" style="margin:0;width:130px">
+            <select id="v6Mode">
+              <option value="auto">IPv6 自动检测</option>
+              <option value="on">IPv6 强制启用</option>
+              <option value="off">IPv6 强制关闭</option>
+            </select>
+          </div>
+          <span id="v6Badge" style="font-size:12px;padding:3px 9px;border-radius:20px;border:1px solid var(--line);color:var(--dim);white-space:nowrap">检测中…</span>
+          <span id="v6Detail" style="font-size:12px;color:var(--dim2);max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+          <button class="btn sm" id="btnV6">重测</button>
           <div style="flex:1"></div>
           <button class="btn sm" id="btnValidate">校验配置</button>
           <button class="btn pri sm" id="btnApply">部署到服务器</button>
@@ -529,9 +539,34 @@ async function refresh() {
   S.global = Object.assign({apiHost:'', apiKey:'', logLevel:'error', core:'sing'}, st.global || {});
   renderServices(st.services);
   renderPorts(st.ports);
+  renderIpv6(st.ipv6);
   renderGlobal();
   renderNodes();
   validate();
+}
+
+/* IPv6：没有 v6 出口的机器，内核每建一条连接都要先吃一次 unreachable
+   再回落 v4，表现就是卡。这里把探测结果摆明，并允许手动覆盖。 */
+function renderIpv6(v) {
+  if (!v) return;
+  S.ipv6 = v;
+  const det = v.detected || {};
+  const on = !!v.enabled;
+  const b = $('#v6Badge'), d = $('#v6Detail'), sel = $('#v6Mode');
+  if (b) {
+    b.textContent = on ? 'IPv6 可用' : 'IPv6 不可用';
+    b.style.color = on ? 'var(--ok)' : 'var(--warn)';
+    b.style.borderColor = on ? 'rgba(63,185,80,.4)' : 'rgba(210,153,34,.4)';
+  }
+  if (sel && document.activeElement !== sel) sel.value = v.mode || 'auto';
+  if (d) {
+    const parts = [v.why || ''];
+    if (det.addrs && det.addrs.length) parts.push(det.addrs.slice(0, 2).join(' / '));
+    else parts.push('无全局地址');
+    if (!det.ok && det.detail) parts.push(det.detail);
+    d.textContent = parts.filter(Boolean).join(' · ');
+    d.title = d.textContent;
+  }
 }
 
 /* 实际在监听的端口。面板说「保存成功」是一回事，内核真的把端口打开了
@@ -1462,6 +1497,30 @@ function bind() {
   $('#btnAdd').addEventListener('click', () => openNode(null));
   $('#btnApply').addEventListener('click', doApply);
   $('#btnValidate').addEventListener('click', doValidate);
+
+  $('#btnV6').addEventListener('click', async () => {
+    const btn = $('#btnV6');
+    btn.disabled = true;
+    $('#v6Badge').textContent = '探测中…';
+    $('#v6Badge').style.color = 'var(--dim)';
+    try {
+      renderIpv6(await api('/api/ipv6?force=1'));
+    } catch (e) {
+      toast('探测失败: ' + e.message, 'err');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  $('#v6Mode').addEventListener('change', async (e) => {
+    try {
+      const r = await api('/api/ipv6', {method:'POST', body:{mode: e.target.value}});
+      renderIpv6(r.ipv6);
+      toast('IPv6 策略已切换，部署后生效', 'ok');
+    } catch (err) {
+      toast('切换失败: ' + err.message, 'err');
+    }
+  });
   $('#btnPreview').addEventListener('click', openPreview);
   $('#btnSaveNode').addEventListener('click', saveNode);
   $('#btnReloadLog').addEventListener('click', loadLog);
