@@ -1,8 +1,11 @@
 # V2bX 节点管理面板
 
+> 本文件是面板的专题文档（实现细节、接口、字段）。
+> 项目整体介绍 —— 它解决什么、亮点、一键安装怎么用 —— 见 [main 分支 README](https://github.com/Minerchu/v3bx/blob/main/README.md)。
+
 给 V2bX / sing-box 节点机用的 Web 管理面板。**不用再 SSH 手写 JSON，浏览器里填表加节点，写错自动拦住，改崩了自动回滚。**
 
-本目录是 [v3bx](../README.md) 的配套工具，与主程序解耦：只读写 `/etc/V2bX/config.json` 和 `/etc/sing-shadowtls/config.json`，不改 V2bX 二进制、不改服务单元。不用它，V2bX 照常跑；用了它，加节点不用碰命令行。
+这个面板是 [v3bx](https://github.com/Minerchu/v3bx/blob/main/README.md) 的配套工具，与主程序解耦：只读写 `/etc/V2bX/config.json` 和 `/etc/sing-shadowtls/config.json`，不改 V2bX 二进制、不改服务单元。不用它，V2bX 照常跑；用了它，加节点不用碰命令行。
 
 - 零依赖：只用 Python 3 标准库，不装任何 pip 包
 - 单进程：两个文件 + 一个 systemd 单元
@@ -321,4 +324,4 @@ bash panel/install.sh          # 重跑安装即覆盖 /opt/v2bx-panel 下的程
 
 ## License
 
-本目录代码随主仓库一同以 [MPL-2.0](../LICENSE) 发布。
+本目录代码随主仓库一同以 [MPL-2.0](./LICENSE) 发布。
