@@ -72,6 +72,24 @@ wget -N https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh && bash 
 [手动安装教程](https://v2bx.v-50.me/v2bx/v2bx-xia-zai-he-an-zhuang/install/manual)
 
 
+## Web 管理面板
+
+本仓库附带一个节点管理面板（[`panel/`](./panel/)），解决「每加一个节点都要 SSH 手改 `config.json`、写错一处整机节点全挂」的问题。
+
+```bash
+git clone --depth 1 https://github.com/Minerchu/v3bx.git
+cd v3bx/panel && bash install.sh
+```
+
+![节点列表](panel/docs/screenshots/01-nodes.png)
+
+- 表单按协议自动适配字段，内核只列可选项（`hysteria2` 选不到 `xray`），证书区块按协议自动显示
+- 保存前实时校验：非法 core、端口冲突、证书凭据缺失，当场标红，不进部署流程
+- 部署走事务：备份 → `sing-box check` → 原子替换 → 重启 → 两次确认 → 失败自动回滚并回显错误行
+- 内置 acme.sh DNS-01 证书申请，DNS 凭据存一次、后续节点自动继承
+
+零依赖（Python 3 标准库）、单进程、systemd 托管，与 V2bX 二进制完全解耦。详见 [panel/README.md](./panel/README.md)。
+
 ## 特点
 
 * 永久开源且免费。

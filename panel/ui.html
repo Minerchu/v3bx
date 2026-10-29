@@ -1,0 +1,1197 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>节点面板</title>
+<style>
+:root{
+  --bg:#0d1117; --bg2:#151b23; --bg3:#1c242e; --line:#26303c;
+  --txt:#c9d1d9; --dim:#7d8590; --dim2:#56606b;
+  --acc:#2f81f7; --acc2:#1f6feb;
+  --ok:#3fb950; --warn:#d29922; --err:#f85149;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--bg);color:var(--txt);
+  font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+code,.mono{font-family:var(--mono);font-size:.92em}
+code{background:#1f2733;padding:1px 5px;border-radius:3px;color:#a5d6ff}
+a{color:var(--acc);text-decoration:none}
+button{font:inherit;cursor:pointer;border:none;background:none;color:inherit}
+input,select,textarea{
+  font:inherit;background:var(--bg);border:1px solid var(--line);color:var(--txt);
+  border-radius:6px;padding:7px 10px;width:100%;outline:none;transition:border-color .15s,box-shadow .15s;
+}
+input:focus,select:focus,textarea:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(47,129,247,.12)}
+input::placeholder{color:var(--dim2)}
+input[readonly]{background:#11161d;color:var(--dim)}
+select{appearance:none;background-image:url("data:image/svg+xml;charset=utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%237d8590' d='M6 8L2 4h8z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;padding-right:30px}
+
+/* 登录 */
+#login{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+.login-box{width:100%;max-width:340px}
+.login-box h1{font-size:19px;font-weight:600;margin-bottom:4px;letter-spacing:.3px}
+.login-box .sub{color:var(--dim);font-size:12.5px;margin-bottom:22px}
+.login-box .f{margin-bottom:12px}
+.login-box label{display:block;font-size:12px;color:var(--dim);margin-bottom:5px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  padding:8px 15px;border-radius:6px;font-size:13px;font-weight:500;
+  border:1px solid var(--line);background:var(--bg3);transition:.15s;white-space:nowrap}
+.btn:hover{background:#242d38;border-color:#33404f}
+.btn.pri{background:var(--acc2);border-color:var(--acc2);color:#fff}
+.btn.pri:hover{background:#2b7de0}
+.btn.dan{color:var(--err);border-color:#4a2020;background:#2a1618}
+.btn.dan:hover{background:#3a1c1e}
+.btn.sm{padding:5px 11px;font-size:12px}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.block{width:100%;padding:9px}
+
+/* 布局 */
+#app{min-height:100vh;display:flex;flex-direction:column}
+header{
+  display:flex;align-items:center;gap:16px;padding:0 18px;height:52px;
+  border-bottom:1px solid var(--line);background:var(--bg2);flex-shrink:0;position:sticky;top:0;z-index:20;
+}
+.brand{font-weight:600;font-size:14px;letter-spacing:.4px;display:flex;align-items:center;gap:8px}
+.brand .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 8px var(--ok)}
+nav{display:flex;gap:2px;margin-left:8px}
+nav button{padding:6px 13px;border-radius:6px;font-size:13px;color:var(--dim);transition:.15s}
+nav button:hover{color:var(--txt);background:var(--bg3)}
+nav button.on{color:#fff;background:var(--bg3)}
+header .sp{flex:1}
+.svc{display:flex;gap:14px;font-size:12px;font-family:var(--mono)}
+.svc span{display:flex;align-items:center;gap:5px;color:var(--dim)}
+.svc i{width:6px;height:6px;border-radius:50%;background:var(--dim2);display:inline-block}
+.svc i.on{background:var(--ok);box-shadow:0 0 6px rgba(63,185,80,.6)}
+.svc i.bad{background:var(--err);box-shadow:0 0 6px rgba(248,81,73,.6)}
+
+main{flex:1;padding:20px;max-width:1320px;width:100%;margin:0 auto}
+.view{display:none}
+.view.on{display:block}
+
+/* 工具栏 */
+.bar{display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap}
+.bar h2{font-size:15px;font-weight:600;margin-right:auto;display:flex;align-items:center;gap:9px}
+.cnt{font-size:11.5px;color:var(--dim);font-family:var(--mono);background:var(--bg3);
+  padding:2px 8px;border-radius:10px;font-weight:400}
+
+/* 节点卡 */
+.node{
+  background:var(--bg2);border:1px solid var(--line);border-radius:9px;
+  padding:14px 16px;margin-bottom:10px;transition:.15s;position:relative;overflow:hidden;
+}
+.node:hover{border-color:#33404f;background:#171e27}
+.node::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--acc);opacity:.55}
+.node.sb::before{background:#a371f7}
+.node-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.node-title{font-weight:600;font-size:14px}
+.node-title small{font-weight:400;color:var(--dim);font-size:12px;margin-left:9px;font-family:var(--mono);letter-spacing:0}
+.pill{font-size:10.5px;font-family:var(--mono);padding:2px 7px;border-radius:4px;
+  background:#1f2733;color:#a5d6ff;letter-spacing:.3px;text-transform:uppercase}
+.pill.own{background:#12261a;color:#7ee787}
+.pill.own.sb{background:#221a33;color:#c297ff}
+.pill.tls{background:#2a2210;color:#e3b341}
+.pill.domain{text-transform:none;letter-spacing:0;font-size:11px}
+.node-meta{display:flex;gap:16px;margin-top:9px;font-size:12px;color:var(--dim);flex-wrap:wrap;font-family:var(--mono)}
+.node-meta b{color:var(--txt);font-weight:500}
+.node-act{display:flex;gap:6px;margin-left:auto}
+.icon-btn{width:28px;height:28px;border-radius:6px;border:1px solid var(--line);
+  display:flex;align-items:center;justify-content:center;color:var(--dim);transition:.15s;position:relative}
+.icon-btn:hover{color:var(--txt);background:var(--bg3);border-color:#33404f}
+.icon-btn.del:hover{color:var(--err);border-color:#4a2020;background:#2a1618}
+.icon-btn.del::before,.icon-btn.del::after{content:"";position:absolute;left:50%;top:50%;
+  width:11px;height:1.5px;background:currentColor;border-radius:1px}
+.icon-btn.del::before{transform:translate(-50%,-50%) rotate(45deg)}
+.icon-btn.del::after{transform:translate(-50%,-50%) rotate(-45deg)}
+
+.empty{text-align:center;padding:56px 20px;color:var(--dim)}
+.empty .big{font-size:15px;color:var(--txt);margin-bottom:6px}
+
+/* 校验提示 */
+.checks{margin:14px 0;display:flex;flex-direction:column;gap:6px}
+.check{display:flex;gap:9px;padding:9px 12px;border-radius:6px;font-size:12.5px;
+  background:var(--bg3);border-left:2px solid var(--dim2);line-height:1.6}
+.check.error{border-left-color:var(--err);background:#221516}
+.check.warn{border-left-color:var(--warn);background:#221d10}
+.check.ok{border-left-color:var(--ok);background:#122014}
+.check .ico{flex-shrink:0;font-weight:700;font-family:var(--mono);font-size:11px;padding-top:1px}
+.check.error .ico{color:var(--err)}
+.check.warn .ico{color:var(--warn)}
+.check.ok .ico{color:var(--ok)}
+
+/* 表单 */
+.f{margin-bottom:13px}
+.f label{display:block;font-size:12px;color:var(--dim);margin-bottom:5px}
+.f label .req{color:var(--err);margin-left:2px}
+.f .hint{font-size:11.5px;color:var(--dim2);margin-top:4px;line-height:1.5}
+#formHint{position:sticky;top:-18px;z-index:6;background:var(--bg2);padding:2px 0 10px;margin-bottom:2px}
+#formHint:empty{display:none}
+#formHint .check{padding:8px 11px;font-size:12px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+fieldset{border:1px solid var(--line);border-radius:8px;padding:14px 16px 4px;margin-bottom:14px;background:#12181f}
+legend{font-size:11.5px;color:var(--dim);padding:0 7px;letter-spacing:.5px;text-transform:uppercase;font-weight:600}
+
+/* 模态 */
+.mask{position:fixed;inset:0;background:rgba(0,0,0,.72);backdrop-filter:blur(2px);
+  display:none;align-items:flex-start;justify-content:center;z-index:100;padding:32px 16px;overflow-y:auto}
+.mask.on{display:flex}
+.modal{background:var(--bg2);border:1px solid var(--line);border-radius:11px;width:100%;max-width:680px;
+  box-shadow:0 16px 48px rgba(0,0,0,.6);animation:pop .16s ease}
+@keyframes pop{from{opacity:0;transform:translateY(-8px) scale(.99)}}
+.modal.wide{max-width:900px}
+.modal-head{display:flex;align-items:center;padding:15px 20px;border-bottom:1px solid var(--line)}
+.modal-head h3{font-size:14.5px;font-weight:600;margin-right:auto}
+.modal-body{padding:18px 20px;max-height:calc(100vh - 220px);overflow-y:auto}
+.modal-foot{display:flex;gap:9px;padding:14px 20px;border-top:1px solid var(--line);justify-content:flex-end}
+.modal-foot .sp{flex:1}
+.x{width:26px;height:26px;border-radius:5px;display:flex;align-items:center;justify-content:center;
+  color:var(--dim);position:relative}
+.x:hover{background:var(--bg3);color:var(--txt)}
+.x::before,.x::after{content:"";position:absolute;width:11px;height:1.5px;background:currentColor;border-radius:1px}
+.x::before{transform:rotate(45deg)}
+.x::after{transform:rotate(-45deg)}
+
+/* 日志 */
+pre.log{background:#0a0e13;border:1px solid var(--line);border-radius:8px;padding:13px 15px;
+  font-family:var(--mono);font-size:11.5px;line-height:1.65;overflow-x:auto;max-height:560px;overflow-y:auto;
+  white-space:pre-wrap;word-break:break-all;color:#8b949e}
+pre.log .e{color:var(--err)}
+pre.log .w{color:var(--warn)}
+pre.log .g{color:var(--ok)}
+
+/* 步骤 */
+.steps{display:flex;flex-direction:column;gap:5px;margin:14px 0}
+.step{display:flex;align-items:center;gap:9px;font-size:12.5px;padding:7px 11px;
+  border-radius:6px;background:var(--bg3)}
+.step .n{width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  font-size:10px;font-family:var(--mono);flex-shrink:0;background:#2a323d;color:var(--dim)}
+.step.ok .n{background:#12351d;color:var(--ok)}
+.step.bad .n{background:#3a1618;color:var(--err)}
+.step .d{margin-left:auto;color:var(--dim);font-size:11.5px;font-family:var(--mono)}
+
+/* 其它 */
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(80px);
+  background:#1f2733;border:1px solid var(--line);border-radius:8px;padding:10px 18px;font-size:13px;
+  box-shadow:0 8px 24px rgba(0,0,0,.5);opacity:0;transition:.24s;z-index:300;pointer-events:none;max-width:90vw}
+.toast.on{transform:translateX(-50%) translateY(0);opacity:1}
+.toast.err{border-color:#5c2323;background:#2a1618;color:#ffa198}
+.toast.ok{border-color:#1f4d29;background:#122014;color:#7ee787}
+.tabs{display:flex;gap:2px;margin-bottom:14px;border-bottom:1px solid var(--line)}
+.tabs button{padding:8px 14px;font-size:13px;color:var(--dim);border-bottom:2px solid transparent;margin-bottom:-1px}
+.tabs button.on{color:var(--txt);border-bottom-color:var(--acc)}
+.tabs button:hover{color:var(--txt)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:8px 18px;font-size:12.5px}
+.kv dt{color:var(--dim)}
+.kv dd{font-family:var(--mono);color:var(--txt);word-break:break-all}
+.tip{font-size:12px;color:var(--dim);background:#12181f;border:1px solid var(--line);
+  border-radius:7px;padding:10px 13px;line-height:1.65;margin-bottom:14px}
+.tip b{color:var(--txt)}
+@media(max-width:720px){
+  header{padding:0 12px;gap:10px}
+  nav button{padding:6px 9px;font-size:12px}
+  .svc{display:none}
+  main{padding:14px}
+  .grid2,.grid3{grid-template-columns:1fr}
+  .modal-body{max-height:calc(100vh - 200px)}
+  .node-meta{gap:10px}
+}
+</style>
+</head>
+<body>
+
+<!-- ========== 登录 ========== -->
+<div id="login">
+  <div class="login-box">
+    <h1>节点管理面板</h1>
+    <div class="sub">V2bX / sing-box 配置管理</div>
+    <div class="f"><label>用户名</label><input id="lgUser" value="admin" autocomplete="username"></div>
+    <div class="f"><label>密码</label><input id="lgPass" type="password" autocomplete="current-password" placeholder="首次密码见 /etc/v2bx-panel/INITIAL_PASSWORD.txt"></div>
+    <button class="btn pri block" id="lgBtn">登 录</button>
+    <div id="lgErr" style="color:var(--err);font-size:12.5px;margin-top:11px;min-height:18px"></div>
+  </div>
+</div>
+
+<!-- ========== 主界面 ========== -->
+<div id="app" hidden>
+  <header>
+    <div class="brand"><span class="dot"></span>节点面板</div>
+    <nav>
+      <button data-view="nodes" class="on">节点</button>
+      <button data-view="logs">日志</button>
+      <button data-view="backup">备份</button>
+      <button data-view="settings">设置</button>
+    </nav>
+    <div class="sp"></div>
+    <div class="svc" id="svcBar"></div>
+    <button class="btn sm" id="btnLogout" style="margin-left:12px">退出</button>
+  </header>
+
+  <main>
+    <!-- 节点 -->
+    <section class="view on" id="v-nodes">
+      <div class="bar">
+        <h2>节点 <span class="cnt" id="nodeCnt">0</span></h2>
+        <button class="btn sm" id="btnPreview">查看配置</button>
+        <button class="btn pri sm" id="btnAdd">+ 添加节点</button>
+      </div>
+
+      <div id="globalBox" style="background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:14px 16px;margin-bottom:16px">
+        <div class="grid3">
+          <div class="f" style="margin:0">
+            <label>面板地址 ApiHost <span class="req">*</span></label>
+            <input data-g="apiHost" placeholder="https://panel.example.com">
+          </div>
+          <div class="f" style="margin:0">
+            <label>ApiKey <span class="req">*</span></label>
+            <input data-g="apiKey" type="password" placeholder="面板通讯密钥">
+          </div>
+          <div class="f" style="margin:0">
+            <label>V2bX 内核</label>
+            <select data-g="core">
+              <option value="sing">sing（推荐，支持协议多）</option>
+              <option value="xray">xray</option>
+            </select>
+          </div>
+        </div>
+        <div style="display:flex;gap:14px;align-items:center;margin-top:12px;flex-wrap:wrap">
+          <div class="f" style="margin:0;width:150px">
+            <select data-g="logLevel">
+              <option value="error">日志 error</option>
+              <option value="warn">日志 warn</option>
+              <option value="info">日志 info</option>
+              <option value="debug">日志 debug</option>
+            </select>
+          </div>
+          <div style="flex:1"></div>
+          <button class="btn sm" id="btnValidate">校验配置</button>
+          <button class="btn pri sm" id="btnApply">部署到服务器</button>
+        </div>
+      </div>
+
+      <div class="checks" id="checks"></div>
+      <div id="nodeList"></div>
+    </section>
+
+    <!-- 日志 -->
+    <section class="view" id="v-logs">
+      <div class="bar">
+        <h2>服务日志</h2>
+        <select id="logSvc" style="width:auto;min-width:150px">
+          <option value="v2bx">V2bX</option>
+          <option value="singbox">sing-box</option>
+        </select>
+        <select id="logLines" style="width:auto;min-width:110px">
+          <option value="120">最近 120 行</option>
+          <option value="300">最近 300 行</option>
+          <option value="500">最近 500 行</option>
+        </select>
+        <button class="btn sm" id="btnReloadLog">刷新</button>
+        <button class="btn sm" id="btnRestart">重启服务</button>
+      </div>
+      <div id="logErrors"></div>
+      <pre class="log" id="logBox">加载中…</pre>
+    </section>
+
+    <!-- 备份 -->
+    <section class="view" id="v-backup">
+      <div class="bar">
+        <h2>配置备份</h2>
+        <button class="btn sm" id="btnReloadBak">刷新</button>
+      </div>
+      <div class="tip">每次部署前都会自动备份原配置，失败时自动回滚。这里也可以手动回滚到任意历史版本。<b>回滚会立即重启服务。</b></div>
+      <div id="bakList"></div>
+    </section>
+
+    <!-- 设置 -->
+    <section class="view" id="v-settings">
+      <div class="bar"><h2>设置</h2></div>
+      <div style="max-width:420px">
+        <fieldset>
+          <legend>修改密码</legend>
+          <div class="f"><label>原密码</label><input id="pwOld" type="password"></div>
+          <div class="f"><label>新密码（至少 8 位）</label><input id="pwNew" type="password"></div>
+          <div class="f"><label>确认新密码</label><input id="pwNew2" type="password"></div>
+          <button class="btn pri" id="btnPw">保存</button>
+        </fieldset>
+        <fieldset>
+          <legend>环境信息</legend>
+          <dl class="kv" id="envInfo"></dl>
+        </fieldset>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- ========== 节点编辑 ========== -->
+<div class="mask" id="mNode">
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="mNodeTitle">添加节点</h3>
+      <button class="x" data-close="mNode"></button>
+    </div>
+    <div class="modal-body" id="nodeForm"></div>
+    <div class="modal-foot">
+      <span style="flex:1"></span>
+      <button class="btn" data-close="mNode">取消</button>
+      <button class="btn pri" id="btnSaveNode">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========== 结果 ========== -->
+<div class="mask" id="mResult">
+  <div class="modal wide">
+    <div class="modal-head">
+      <h3 id="mResultTitle">部署结果</h3>
+      <button class="x" data-close="mResult"></button>
+    </div>
+    <div class="modal-body" id="resultBody"></div>
+    <div class="modal-foot">
+      <button class="btn" data-close="mResult">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========== 配置预览 ========== -->
+<div class="mask" id="mPreview">
+  <div class="modal wide">
+    <div class="modal-head">
+      <h3>配置预览</h3>
+      <button class="x" data-close="mPreview"></button>
+    </div>
+    <div class="modal-body">
+      <div class="tabs" id="pvTabs">
+        <button data-svc="v2bx" class="on">V2bX config.json</button>
+        <button data-svc="singbox">sing-box config.json</button>
+      </div>
+      <pre class="log" id="pvBox" style="max-height:520px"></pre>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+const S = {
+  token: localStorage.getItem('vp_token') || '',
+  nodes: [],
+  global: {apiHost:'', apiKey:'', logLevel:'error', core:'sing'},
+  meta: null,
+  editing: null,
+};
+
+function toast(msg, kind) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.className = 'toast on' + (kind ? ' ' + kind : '');
+  clearTimeout(t._h);
+  t._h = setTimeout(() => t.className = 'toast' + (kind ? ' ' + kind : ''), 2600);
+}
+
+async function api(path, opts) {
+  opts = opts || {};
+  const headers = {'Content-Type': 'application/json'};
+  if (S.token) headers['Authorization'] = 'Bearer ' + S.token;
+  const r = await fetch(path, {
+    method: opts.method || 'GET',
+    headers,
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  let data = null;
+  try { data = await r.json(); } catch (e) { data = {error: '响应解析失败'}; }
+  if (r.status === 401) {
+    logout(false);
+    throw new Error(data.error || '登录已失效');
+  }
+  if (!r.ok && data && data.error) throw new Error(data.error);
+  return data;
+}
+
+/* ================= 登录 ================= */
+async function login() {
+  const u = $('#lgUser').value.trim();
+  const p = $('#lgPass').value;
+  $('#lgErr').textContent = '';
+  if (!u || !p) { $('#lgErr').textContent = '请输入用户名和密码'; return; }
+  $('#lgBtn').disabled = true;
+  try {
+    const d = await api('/api/login', {method:'POST', body:{user:u, password:p}});
+    S.token = d.token;
+    localStorage.setItem('vp_token', S.token);
+    await boot();
+  } catch (e) {
+    $('#lgErr').textContent = e.message;
+  } finally {
+    $('#lgBtn').disabled = false;
+  }
+}
+
+function logout(callServer) {
+  if (callServer !== false && S.token) {
+    api('/api/logout', {method:'POST'}).catch(()=>{});
+  }
+  S.token = '';
+  localStorage.removeItem('vp_token');
+  $('#app').hidden = true;
+  $('#login').style.display = '';
+}
+
+async function boot() {
+  try {
+    S.meta = await api('/api/meta');
+  } catch (e) {
+    logout(false);
+    return;
+  }
+  $('#login').style.display = 'none';
+  $('#app').hidden = false;
+  await refresh();
+  renderEnv();
+}
+
+/* ================= 数据 ================= */
+async function refresh() {
+  const st = await api('/api/state');
+  S.nodes = st.nodes || [];
+  S.global = Object.assign({apiHost:'', apiKey:'', logLevel:'error', core:'sing'}, st.global || {});
+  renderServices(st.services);
+  renderGlobal();
+  renderNodes();
+  validate();
+}
+
+function renderServices(sv) {
+  const mk = (label, s) => {
+    const on = s && s.active === 'active';
+    const cls = on ? 'on' : 'bad';
+    return '<span><i class="' + cls + '"></i>' + esc(label) + '</span>';
+  };
+  $('#svcBar').innerHTML = mk('V2bX', sv.v2bx) + mk('sing-box', sv.singbox);
+}
+
+function renderGlobal() {
+  $$('[data-g]').forEach(el => {
+    const k = el.dataset.g;
+    if (k === 'apiKey') {
+      el.value = S.global.apiKey ? '••••••••' : '';
+      el.dataset.masked = S.global.apiKey === '__KEEP__' ? '1' : '';
+    } else {
+      el.value = S.global[k] || '';
+    }
+  });
+}
+
+function collectGlobal() {
+  const g = {};
+  $$('[data-g]').forEach(el => {
+    const k = el.dataset.g;
+    if (k === 'apiKey') {
+      const v = el.value.trim();
+      g.apiKey = (v === '••••••••' || v === '') ? (S.global.apiKey || '') : v;
+      if (g.apiKey === '••••••••') g.apiKey = '__KEEP__';
+    } else {
+      g[k] = el.value;
+    }
+  });
+  return g;
+}
+
+/* ================= 节点列表 ================= */
+const PROTO_LABEL = t => (S.meta && S.meta.protocols[t]) ? S.meta.protocols[t].label : t;
+
+function renderNodes() {
+  const box = $('#nodeList');
+  $('#nodeCnt').textContent = S.nodes.length;
+  if (!S.nodes.length) {
+    box.innerHTML = '<div class="empty"><div class="big">还没有节点</div>点击右上角「+ 添加节点」开始</div>';
+    return;
+  }
+  box.innerHTML = S.nodes.map(n => {
+    const isSb = n.owner === 'singbox';
+    const c = n.cert || {};
+    const tlsTxt = (c.mode && c.mode !== 'none')
+      ? (c.mode + (c.domain ? ' · ' + c.domain : ''))
+      : '无 TLS';
+    const portTxt = isSb ? (':' + (n.listenPort || '—')) : (n.nodeId ? ('Node ' + n.nodeId) : '—');
+    return '<div class="node' + (isSb ? ' sb' : '') + '" data-uid="' + esc(n.uid) + '">' +
+      '<div class="node-head">' +
+        '<div class="node-title">' + esc(PROTO_LABEL(n.nodeType)) +
+          '<small>' + esc(portTxt) + '</small></div>' +
+        '<span class="pill">' + esc(n.nodeType) + '</span>' +
+        '<span class="pill own' + (isSb ? ' sb' : '') + '">' + (isSb ? 'sing-box' : 'V2bX') + '</span>' +
+        '<span class="pill">' + esc(n.core || '—') + '</span>' +
+        '<span class="pill tls domain">' + esc(tlsTxt) + '</span>' +
+        '<div class="node-act">' +
+          '<button class="icon-btn" data-edit="' + esc(n.uid) + '" title="编辑">' +
+            '<svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">' +
+            '<path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61Zm1.414 1.06a.25.25 0 0 0-.354 0L3.463 11.1a.25.25 0 0 0-.064.108l-.585 2.048 2.048-.585a.25.25 0 0 0 .108-.064l8.612-8.61a.25.25 0 0 0 0-.354Z"/>' +
+            '</svg></button>' +
+          '<button class="icon-btn del" data-del="' + esc(n.uid) + '" title="删除"></button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="node-meta">' +
+        (isSb
+          ? '<span>监听 <b>' + esc(n.listenIP || '0.0.0.0') + ':' + esc(n.listenPort || '') + '</b></span>' +
+            (n.stlsDetourPort ? '<span>内层 <b>127.0.0.1:' + esc(n.stlsDetourPort) + '</b></span>' : '')
+          : '<span>面板节点 <b>#' + esc(n.nodeId) + '</b></span>') +
+        '<span>证书 <b>' + esc(c.mode || 'none') + '</b></span>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+/* ================= 校验 ================= */
+let vTimer = null;
+function validate() {
+  clearTimeout(vTimer);
+  vTimer = setTimeout(async () => {
+    try {
+      const d = await api('/api/validate', {
+        method: 'POST',
+        body: {nodes: S.nodes, global: collectGlobal()},
+      });
+      renderChecks(d.errors || []);
+    } catch (e) { /* 静默 */ }
+  }, 250);
+}
+
+function renderChecks(errs) {
+  const box = $('#checks');
+  if (!errs.length) {
+    box.innerHTML = '<div class="check ok"><span class="ico">✓</span><div>配置校验通过，可以部署</div></div>';
+    return;
+  }
+  const order = {error: 0, warn: 1, info: 2};
+  errs.sort((a, b) => (order[a.level] ?? 9) - (order[b.level] ?? 9));
+  const LIMIT = 5;
+  const shown = errs.length > LIMIT + 1 ? errs.slice(0, LIMIT) : errs;
+  const rest = errs.length - shown.length;
+  const render = arr => arr.map(e => {
+    const ico = e.level === 'error' ? '✕' : e.level === 'warn' ? '!' : 'i';
+    return '<div class="check ' + e.level + '"><span class="ico">' + ico + '</span><div>' +
+      (e.field ? '<code>' + esc(e.field) + '</code> ' : '') + e.msg + '</div></div>';
+  }).join('');
+  box.innerHTML = render(shown) +
+    (rest > 0 ? '<button class="btn sm" id="btnMoreChecks" style="align-self:flex-start">还有 ' + rest + ' 条提示，展开</button>' : '');
+  const mb = $('#btnMoreChecks');
+  if (mb) mb.addEventListener('click', () => {
+    box.innerHTML = render(errs);
+  });
+}
+
+/* ================= 节点表单 ================= */
+function newNode(type, owner) {
+  type = type || 'vless';
+  owner = owner || 'v2bx';
+  const meta = (S.meta && S.meta.protocols[type]) || {cores:['sing'], tls:'optional'};
+  const pool = (S.meta && S.meta.creds) || {};
+  const defProv = Object.keys(pool)[0] || 'cloudflare';
+  const dnsEnv = pool[defProv] ? Object.assign({}, pool[defProv]) : {};
+  return {
+    uid: 'new_' + Math.random().toString(36).slice(2, 10),
+    owner,
+    nodeId: nextNodeId(),
+    nodeType: type,
+    core: owner === 'v2bx' ? (S.global.core || 'sing') : meta.cores[0],
+    listenIP: owner === 'v2bx' ? '::' : '0.0.0.0',
+    listenPort: 0,
+    cert: {
+      mode: meta.tls === 'none' ? 'none' : 'dns',
+      domain: '', certFile: '/etc/V2bX/fullchain.cer', keyFile: '/etc/V2bX/cert.key',
+      email: '', provider: defProv, dnsEnv: dnsEnv,
+    },
+    remark: '',
+    transport: 'ws', path: '/', host: '',
+    method: '2022-blake3-aes-256-gcm', password: '',
+    upMbps: 100, downMbps: 500, obfs: '', obfsPassword: '',
+    masquerade: 'https://www.bing.com', congestionControl: 'bbr',
+    stlsDetourPort: 0, stlsHandshake: 'www.php.net', stlsPassword: '',
+  };
+}
+
+function nextNodeId() {
+  const used = S.nodes.filter(n => n.owner === 'v2bx').map(n => Number(n.nodeId) || 0);
+  return used.length ? Math.max.apply(null, used) + 1 : 1;
+}
+
+function openNode(uid) {
+  const n = uid ? S.nodes.find(x => x.uid === uid) : null;
+  S.editing = n ? JSON.parse(JSON.stringify(n)) : newNode('vless', 'v2bx');
+  $('#mNodeTitle').textContent = n ? '编辑节点' : '添加节点';
+  renderForm();
+  $('#mNode').classList.add('on');
+}
+
+function renderForm() {
+  const n = S.editing;
+  const meta = (S.meta && S.meta.protocols[n.nodeType]) || {cores:['sing'], tls:'optional'};
+  const isSb = n.owner === 'singbox';
+  const needTls = meta.tls !== 'none';
+  const H = ['<div id="formHint"></div>'];
+
+  // ---- 基础 ----
+  H.push('<fieldset><legend>基础</legend>');
+  H.push('<div class="grid2">');
+  H.push('<div class="f"><label>承载进程 <span class="req">*</span></label>' +
+    '<select data-f="owner">' +
+      '<option value="v2bx"' + (n.owner==='v2bx'?' selected':'') + '>V2bX（面板下发参数）</option>' +
+      '<option value="singbox"' + (isSb?' selected':'') + '>sing-box（本地完整配置）</option>' +
+    '</select>' +
+    '<div class="hint">V2bX 只管「跑哪个 NodeID」，端口密码由面板下发；sing-box 需要在这里填完整参数</div></div>');
+
+  H.push('<div class="f"><label>协议 <span class="req">*</span></label>' +
+    '<select data-f="nodeType">' +
+      Object.keys(S.meta.protocols).map(k =>
+        '<option value="' + k + '"' + (n.nodeType===k?' selected':'') + '>' +
+        esc(S.meta.protocols[k].label) + ' (' + k + ')</option>').join('') +
+    '</select></div>');
+  H.push('</div>');
+
+  H.push('<div class="grid2">');
+  H.push('<div class="f"><label>内核 <span class="req">*</span></label>' +
+    '<select data-f="core">' +
+      meta.cores.map(c => '<option value="' + c + '"' + (n.core===c?' selected':'') + '>' +
+        c + (c === 'sing' ? '（推荐）' : '') + '</option>').join('') +
+    '</select>' +
+    '<div class="hint">可选范围由协议决定：' + meta.cores.join(' / ') + '</div></div>');
+
+  if (!isSb) {
+    H.push('<div class="f"><label>面板 NodeID <span class="req">*</span></label>' +
+      '<input data-f="nodeId" type="number" min="1" value="' + esc(n.nodeId) + '">' +
+      '<div class="hint">Xboard 面板里该节点的 ID</div></div>');
+  } else {
+    H.push('<div class="f"><label>监听地址</label>' +
+      '<input data-f="listenIP" value="' + esc(n.listenIP) + '" placeholder="0.0.0.0">' +
+      '<div class="hint">内层 SS 建议 127.0.0.1</div></div>');
+  }
+  H.push('</div>');
+
+  if (isSb) {
+    H.push('<div class="grid2">');
+    H.push('<div class="f"><label>监听端口 <span class="req">*</span></label>' +
+      '<input data-f="listenPort" type="number" min="1" max="65535" value="' + esc(n.listenPort || '') + '"></div>');
+    if (n.nodeType === 'shadowsocks') {
+      H.push('<div class="f"><label>shadow-tls 内层端口</label>' +
+        '<input data-f="stlsDetourPort" type="number" value="' + esc(n.stlsDetourPort || '') + '" placeholder="留空则不启用 shadow-tls">' +
+        '<div class="hint">填了就生成 shadowtls 外层 + ss 内层，内层自动绑 127.0.0.1</div></div>');
+    }
+    H.push('</div>');
+  }
+  H.push('</fieldset>');
+
+  // ---- 协议参数 ----
+  if (isSb) {
+    let extra = '';
+    if (['vless','vmess','trojan'].includes(n.nodeType)) {
+      extra += '<div class="grid2">' +
+        '<div class="f"><label>传输方式</label><select data-f="transport">' +
+          ['ws','grpc','tcp','http'].map(t => '<option value="' + t + '"' + (n.transport===t?' selected':'') + '>' + t + '</option>').join('') +
+        '</select></div>' +
+        '<div class="f"><label>WS Path</label><input data-f="path" value="' + esc(n.path) + '"></div>' +
+      '</div>';
+    }
+    if (n.nodeType === 'shadowsocks') {
+      extra += '<div class="grid2">' +
+        '<div class="f"><label>加密方式</label><select data-f="method">' +
+          ['2022-blake3-aes-256-gcm','2022-blake3-aes-128-gcm','2022-blake3-chacha20-poly1305','aes-256-gcm','chacha20-ietf-poly1305'].map(m =>
+            '<option value="' + m + '"' + (n.method===m?' selected':'') + '>' + m + '</option>').join('') +
+        '</select></div>' +
+        '<div class="f"><label>主密码（Base64）</label><input data-f="password" value="' + esc(n.password) + '" placeholder="留空自动生成 32 字节">' +
+        '<div class="hint">SS2022 要求 Base64 编码的 32 字节</div></div>' +
+      '</div>';
+      if (n.stlsDetourPort) {
+        extra += '<div class="grid2">' +
+          '<div class="f"><label>shadow-tls 伪装域名</label><input data-f="stlsHandshake" value="' + esc(n.stlsHandshake) + '"></div>' +
+          '<div class="f"><label>shadow-tls 密码</label><input data-f="stlsPassword" value="' + esc(n.stlsPassword) + '" placeholder="留空自动生成"></div>' +
+        '</div>' +
+        '<div class="f"><label>握手出口（handshake detour）</label>' +
+          '<input data-f="stlsHandshakeDetour" value="' + esc(n.stlsHandshakeDetour || 'direct') + '" placeholder="direct">' +
+          '<div class="hint">伪装握手走哪个 outbound。若配了 <code>domain_strategy: ipv4_only</code> 的专用 direct（如 hs-direct），填它的 tag 可避免 IPv6 解析失败</div></div>';
+      }
+    }
+    if (n.nodeType === 'hysteria2' || n.nodeType === 'tuic') {
+      extra += '<div class="grid2">' +
+        '<div class="f"><label>上行 Mbps</label><input data-f="upMbps" type="number" value="' + esc(n.upMbps) + '"></div>' +
+        '<div class="f"><label>下行 Mbps</label><input data-f="downMbps" type="number" value="' + esc(n.downMbps) + '"></div>' +
+      '</div>';
+      if (n.nodeType === 'hysteria2') {
+        extra += '<div class="grid2">' +
+          '<div class="f"><label>Obfs 混淆</label><select data-f="obfs">' +
+            '<option value="">不启用</option><option value="salamander"' + (n.obfs==='salamander'?' selected':'') + '>salamander</option>' +
+          '</select></div>' +
+          '<div class="f"><label>Obfs 密码</label><input data-f="obfsPassword" value="' + esc(n.obfsPassword) + '"></div>' +
+        '</div>' +
+        '<div class="f"><label>伪装网站</label><input data-f="masquerade" value="' + esc(n.masquerade) + '" placeholder="https://www.bing.com">' +
+        '<div class="hint">探测者访问时看到的页面，和 SNI 无关</div></div>';
+      } else {
+        extra += '<div class="f"><label>拥塞控制</label><select data-f="congestionControl">' +
+          ['bbr','cubic','new_reno'].map(c => '<option value="' + c + '"' + (n.congestionControl===c?' selected':'') + '>' + c + '</option>').join('') +
+        '</select></div>';
+      }
+    }
+    if (extra) H.push('<fieldset><legend>协议参数</legend>' + extra + '</fieldset>');
+  }
+
+  // ---- 证书 ----
+  if (needTls || meta.tls === 'optional') {
+    const c = n.cert;
+    H.push('<fieldset><legend>证书 / TLS</legend>');
+    if (meta.tls === 'required') {
+      H.push('<div class="tip">该协议<b>必须</b>启用 TLS，不能选「不启用」。</div>');
+    }
+    H.push('<div class="grid2">');
+    H.push('<div class="f"><label>证书方式 <span class="req">*</span></label><select data-f="certMode">' +
+      Object.keys(S.meta.certModes).map(m => {
+        if (m === 'none' && meta.tls === 'required') return '';
+        return '<option value="' + m + '"' + (c.mode===m?' selected':'') + '>' + esc(S.meta.certModes[m]) + '</option>';
+      }).join('') + '</select></div>');
+    H.push('<div class="f"><label>域名 / SNI' + (c.mode!=='none'?' <span class="req">*</span>':'') + '</label>' +
+      '<input data-f="certDomain" value="' + esc(c.domain) + '" placeholder="node.example.com"></div>');
+    H.push('</div>');
+
+    if (c.mode === 'file' || c.mode === 'self') {
+      H.push('<div class="grid2">' +
+        '<div class="f"><label>证书路径</label><input data-f="certFile" value="' + esc(c.certFile) + '"></div>' +
+        '<div class="f"><label>私钥路径</label><input data-f="keyFile" value="' + esc(c.keyFile) + '"></div>' +
+      '</div>');
+    }
+    if (c.mode === 'dns' || c.mode === 'http') {
+      H.push('<div class="grid2">' +
+        '<div class="f"><label>邮箱（acme 注册用）</label><input data-f="certEmail" value="' + esc(c.email) + '"></div>');
+      if (c.mode === 'dns') {
+        H.push('<div class="f"><label>DNS 服务商</label><select data-f="certProvider">' +
+          S.meta.providers.map(p => '<option value="' + p + '"' + (c.provider===p?' selected':'') + '>' + p + '</option>').join('') +
+        '</select></div>');
+      }
+      H.push('</div>');
+      if (c.mode === 'dns') {
+        const need = (S.meta.providerEnv[c.provider] || []);
+        const hasPool = !!(((S.meta.creds || {})[c.provider]) || {});
+        H.push('<div class="tip">' +
+          (hasPool
+            ? '已从凭据池继承 <b>' + esc(c.provider) + '</b> 的凭据（显示为掩码），无需重复填写。'
+            : '申请证书需要 <b>' + esc(c.provider) + '</b> 的 API 凭据，填一次后会自动记入凭据池，后续新节点直接复用。') +
+          '这些值会写进 config.json 的 <code>DNSEnv</code>。</div>');
+        H.push('<div class="grid2">');
+        need.forEach(k => {
+          const v = (c.dnsEnv && c.dnsEnv[k]) || '';
+          H.push('<div class="f"><label>' + esc(k) + '</label><input data-env="' + esc(k) + '" type="password" value="' +
+            (v ? '••••••••' : '') + '" placeholder="' + esc(k) + '"></div>');
+        });
+        H.push('</div>');
+        H.push('<button class="btn sm" id="btnIssue" style="margin-bottom:12px">立即申请证书</button>' +
+               '<span id="issueMsg" style="font-size:12px;color:var(--dim);margin-left:10px"></span>');
+      }
+    }
+    H.push('</fieldset>');
+  } else {
+    H.push('<div class="tip">该协议<b>不需要 TLS</b>，证书配置已跳过。</div>');
+  }
+
+  H.push('<div class="f"><label>备注</label><input data-f="remark" value="' + esc(n.remark) + '" placeholder="便于识别的名字"></div>');
+
+  $('#nodeForm').innerHTML = H.join('');
+  bindForm();
+  validateForm();
+}
+
+/* 表单内实时校验：只显示当前节点自己的问题 */
+let fTimer = null;
+function validateForm() {
+  clearTimeout(fTimer);
+  fTimer = setTimeout(async () => {
+    const n = collectForm();
+    const others = S.nodes.filter(x => x.uid !== n.uid);
+    try {
+      const d = await api('/api/validate', {
+        method: 'POST',
+        body: {nodes: others.concat([n]), global: collectGlobal()},
+      });
+      const mine = (d.errors || []).filter(e => !e.uid || e.uid === n.uid);
+      const box = $('#formHint');
+      if (!mine.length) {
+        box.innerHTML = '<div class="check ok" style="margin:0;padding:7px 11px"><span class="ico">✓</span><div>该节点校验通过</div></div>';
+        return;
+      }
+      const order = {error: 0, warn: 1, info: 2};
+      mine.sort((a, b) => (order[a.level] ?? 9) - (order[b.level] ?? 9));
+      box.innerHTML = '<div class="checks" style="margin:0">' + mine.slice(0, 6).map(e => {
+        const ico = e.level === 'error' ? '✕' : e.level === 'warn' ? '!' : 'i';
+        return '<div class="check ' + e.level + '"><span class="ico">' + ico + '</span><div>' +
+          (e.field ? '<code>' + esc(e.field) + '</code> ' : '') + e.msg + '</div></div>';
+      }).join('') + (mine.length > 6 ? '<div style="font-size:11.5px;color:var(--dim)">还有 ' + (mine.length - 6) + ' 条…</div>' : '') + '</div>';
+    } catch (e) { /* 静默 */ }
+  }, 300);
+}
+
+function bindForm() {
+  $$('#nodeForm [data-f]').forEach(el => {
+    el.addEventListener('input', onField);
+    el.addEventListener('change', onField);
+  });
+  $$('#nodeForm [data-env]').forEach(el => {
+    el.addEventListener('input', onField);
+  });
+  const bi = $('#btnIssue');
+  if (bi) bi.addEventListener('click', doIssue);
+}
+
+function onField(e) {
+  const el = e.target;
+  const n = S.editing;
+  const k = el.dataset.f;
+  if (!k) return;
+  setTimeout(validateForm, 0);
+  let v = el.value;
+  if (['nodeId','listenPort','stlsDetourPort','upMbps','downMbps'].includes(k)) {
+    v = v === '' ? 0 : Number(v);
+  }
+  if (k === 'owner') {
+    n.owner = v;
+    n.listenIP = v === 'v2bx' ? '::' : '0.0.0.0';
+    n.core = v === 'v2bx' ? (S.global.core || 'sing') : ((S.meta.protocols[n.nodeType] || {}).cores || ['sing'])[0];
+    renderForm();
+    return;
+  }
+  if (k === 'nodeType') {
+    const old = n.nodeType;
+    n.nodeType = v;
+    const m = S.meta.protocols[v];
+    if (!m.cores.includes(n.core)) n.core = m.cores[0];
+    if (m.tls === 'none') n.cert.mode = 'none';
+    else if (n.cert.mode === 'none' && m.tls === 'required') n.cert.mode = 'dns';
+    renderForm();
+    return;
+  }
+  if (k === 'core') { n.core = v; return; }
+  if (k === 'certMode') {
+    n.cert.mode = v;
+    renderForm();
+    return;
+  }
+  if (k === 'certProvider') {
+    n.cert.provider = v;
+    const pool = ((S.meta && S.meta.creds) || {})[v];
+    n.cert.dnsEnv = pool ? Object.assign({}, pool) : {};
+    renderForm();
+    return;
+  }
+  if (k.startsWith('cert')) {
+    const map = {certDomain:'domain', certFile:'certFile', keyFile:'keyFile', certEmail:'email'};
+    n.cert[map[k]] = v;
+    return;
+  }
+  if (el.dataset.env) {
+    n.cert.dnsEnv = n.cert.dnsEnv || {};
+    if (v !== '••••••••') n.cert.dnsEnv[el.dataset.env] = v;
+    return;
+  }
+  n[k] = v;
+}
+
+function collectForm() {
+  const n = JSON.parse(JSON.stringify(S.editing));
+  // 把已脱敏的 dnsEnv 值还原为哨兵，让后端保留原值
+  const c = n.cert;
+  if (c && c.dnsEnv) {
+    Object.keys(c.dnsEnv).forEach(k => {
+      if (c.dnsEnv[k] === '••••••••') c.dnsEnv[k] = '__KEEP__';
+    });
+  }
+  return n;
+}
+
+async function saveNode() {
+  const n = collectForm();
+  if (!n.uid || n.uid.startsWith('new_')) n.uid = Math.random().toString(36).slice(2, 14);
+  const idx = S.nodes.findIndex(x => x.uid === n.uid);
+  if (idx >= 0) S.nodes[idx] = n;
+  else S.nodes.push(n);
+  $('#mNode').classList.remove('on');
+  renderNodes();
+  validate();
+  toast('已加入待部署列表，点「部署到服务器」生效');
+}
+
+async function doIssue() {
+  const n = S.editing;
+  const c = n.cert;
+  if (!c.domain) { toast('请先填域名', 'err'); return; }
+  const btn = $('#btnIssue');
+  btn.disabled = true;
+  $('#issueMsg').textContent = '申请中，最长 3 分钟…';
+  try {
+    const r = await api('/api/cert/issue', {
+      method: 'POST',
+      body: {domain: c.domain, mode: c.mode, provider: c.provider,
+             dnsEnv: c.dnsEnv || {}, email: c.email, outDir: '/etc/V2bX'},
+    });
+    if (r.ok) {
+      $('#issueMsg').innerHTML = '<span style="color:var(--ok)">签发成功</span> ' + esc(r.certFile);
+      c.certFile = r.certFile;
+      c.keyFile = r.keyFile;
+      c.mode = 'file';
+      renderForm();
+      toast('证书签发成功，已切到「文件」方式', 'ok');
+    } else {
+      $('#issueMsg').innerHTML = '<span style="color:var(--err)">失败</span>';
+      showResult('证书申请失败', [{name:'acme.sh', ok:false, detail:'失败'}],
+                 '<pre class="log">' + esc(r.log || '无输出') + '</pre>', []);
+    }
+  } catch (e) {
+    $('#issueMsg').innerHTML = '<span style="color:var(--err)">' + esc(e.message) + '</span>';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* ================= 部署 ================= */
+async function doValidate() {
+  try {
+    const d = await api('/api/validate', {method:'POST', body:{nodes:S.nodes, global:collectGlobal()}});
+    renderChecks(d.errors || []);
+    if (d.count.error) toast('发现 ' + d.count.error + ' 个错误，请先修正', 'err');
+    else toast('校验通过', 'ok');
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function doApply() {
+  const g = collectGlobal();
+  if (!g.apiHost) { toast('请先填面板地址', 'err'); return; }
+  $('#btnApply').disabled = true;
+  $('#btnApply').textContent = '部署中…';
+  try {
+    const r = await api('/api/apply', {method:'POST', body:{nodes:S.nodes, global:g, target:'all'}});
+    const steps = (r.steps || []).map((s, i) => ({...s, name: s.name}));
+    let extra = '';
+    if (r.errors_lines) {
+      extra = Object.entries(r.errors_lines).map(([svc, lines]) =>
+        '<div style="margin-top:14px"><b style="font-size:12.5px">' + esc(svc) + ' 错误行</b>' +
+        '<pre class="log" style="max-height:240px">' +
+        (lines.length ? lines.map(l => '<span class="e">' + esc(l) + '</span>').join('\n') : '（无明确错误行）') +
+        '</pre></div>').join('');
+    }
+    const logHtml = r.logs ? '<pre class="log" style="max-height:320px">' + colorLog(r.logs) + '</pre>' : '';
+    if (r.ok) {
+      showResult('部署成功', steps, logHtml + extra, r.errors || []);
+      toast('配置已生效', 'ok');
+      await refresh();
+    } else {
+      const title = r.rolled_back ? '部署失败 — 已自动回滚' : '部署失败 — 配置未改动';
+      showResult(title, steps, extra + logHtml, r.errors || []);
+      toast(r.rolled_back ? '启动失败，已自动回滚' : '校验未通过，配置未改动', 'err');
+      if (r.errors) renderChecks(r.errors);
+    }
+  } catch (e) {
+    toast(e.message, 'err');
+  } finally {
+    $('#btnApply').disabled = false;
+    $('#btnApply').textContent = '部署到服务器';
+  }
+}
+
+function showResult(title, steps, html, errs) {
+  $('#mResultTitle').textContent = title;
+  const stepHtml = '<div class="steps">' + (steps || []).map((s, i) =>
+    '<div class="step ' + (s.ok ? 'ok' : 'bad') + '">' +
+      '<span class="n">' + (s.ok ? '✓' : '✕') + '</span>' +
+      '<span>' + esc(s.name) + '</span>' +
+      (s.detail ? '<span class="d">' + esc(s.detail) + '</span>' : '') +
+    '</div>').join('') + '</div>';
+  const errHtml = (errs || []).filter(e => e.level === 'error').map(e =>
+    '<div class="check error"><span class="ico">✕</span><div>' +
+    (e.field ? '<code>' + esc(e.field) + '</code> ' : '') + e.msg + '</div></div>').join('');
+  $('#resultBody').innerHTML = stepHtml + errHtml + (html || '');
+  $('#mResult').classList.add('on');
+}
+
+/* ================= 日志 ================= */
+function colorLog(txt) {
+  return esc(txt).split('\n').map(l => {
+    if (/level=error|panic|fatal|failed|error:/i.test(l)) return '<span class="e">' + l + '</span>';
+    if (/level=warn|warning/i.test(l)) return '<span class="w">' + l + '</span>';
+    if (/level=info|started|listening/i.test(l)) return '<span class="g">' + l + '</span>';
+    return l;
+  }).join('\n');
+}
+
+async function loadLog() {
+  const svc = $('#logSvc').value;
+  const lines = $('#logLines').value;
+  $('#logBox').textContent = '加载中…';
+  try {
+    const d = await api('/api/logs?service=' + svc + '&lines=' + lines);
+    $('#logBox').innerHTML = d.log ? colorLog(d.log) : '（无日志）';
+    const errs = d.errors || [];
+    $('#logErrors').innerHTML = errs.length
+      ? '<div class="check error"><span class="ico">!</span><div>发现 ' + errs.length +
+        ' 条错误/异常，最新一条：<br><code>' + esc(errs[errs.length-1]) + '</code></div></div>'
+      : '<div class="check ok"><span class="ico">✓</span><div>最近日志中未发现错误</div></div>';
+  } catch (e) {
+    $('#logBox').textContent = '读取失败: ' + e.message;
+  }
+}
+
+/* ================= 备份 ================= */
+async function loadBackups() {
+  try {
+    const d = await api('/api/backups');
+    const list = d.backups || [];
+    if (!list.length) { $('#bakList').innerHTML = '<div class="empty">暂无备份</div>'; return; }
+    $('#bakList').innerHTML = list.map(b =>
+      '<div class="node" style="padding:11px 15px">' +
+        '<div class="node-head">' +
+          '<span class="mono" style="font-size:12.5px">' + esc(b.name) + '</span>' +
+          '<span class="pill">' + (b.size / 1024).toFixed(1) + ' KB</span>' +
+          '<span style="color:var(--dim);font-size:12px;margin-left:auto;margin-right:10px">' + esc(b.time) + '</span>' +
+          '<button class="btn sm" data-rollback="' + esc(b.name) + '">回滚到此版本</button>' +
+        '</div>' +
+      '</div>').join('');
+    $$('[data-rollback]').forEach(b => b.addEventListener('click', () => doRollback(b.dataset.rollback)));
+  } catch (e) { $('#bakList').textContent = e.message; }
+}
+
+async function doRollback(name) {
+  if (!confirm('确认回滚到 ' + name + ' ？\n当前配置会先自动备份，然后服务会重启。')) return;
+  try {
+    const r = await api('/api/rollback', {method:'POST', body:{name}});
+    showResult(r.ok ? '回滚成功' : '回滚后服务未正常启动',
+      [{name:'恢复配置', ok:true, detail:name},
+       {name:'重启 ' + r.service, ok:r.ok, detail:r.ok ? '稳定运行' : '状态异常'}],
+      '<pre class="log">' + colorLog(r.log || '') + '</pre>', []);
+    await refresh();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+/* ================= 环境信息 ================= */
+function renderEnv() {
+  if (!S.meta) return;
+  $('#envInfo').innerHTML =
+    '<dt>V2bX 配置</dt><dd>' + esc(S.meta.paths.v2bx) + '</dd>' +
+    '<dt>sing-box 配置</dt><dd>' + esc(S.meta.paths.singbox) + '</dd>' +
+    '<dt>V2bX 版本</dt><dd>' + esc(S.meta.caps.v2bx_version || '未检测') + '</dd>' +
+    '<dt>sing-box 版本</dt><dd>' + esc(S.meta.caps.singbox_version || '未检测') + '</dd>';
+}
+
+/* ================= 预览 ================= */
+async function openPreview() {
+  $('#mPreview').classList.add('on');
+  await loadPreview('v2bx');
+}
+
+async function loadPreview(svc) {
+  $('#pvBox').textContent = '生成中…';
+  try {
+    const d = await api('/api/preview', {method:'POST', body:{nodes:S.nodes, global:collectGlobal(), service:svc}});
+    $('#pvBox').textContent = d.content || '';
+  } catch (e) { $('#pvBox').textContent = e.message; }
+}
+
+/* ================= 事件绑定 ================= */
+function bind() {
+  $('#lgBtn').addEventListener('click', login);
+  $('#lgPass').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
+  $('#btnLogout').addEventListener('click', () => logout(true));
+
+  $$('nav button').forEach(b => b.addEventListener('click', () => {
+    $$('nav button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+    $$('.view').forEach(v => v.classList.remove('on'));
+    $('#v-' + b.dataset.view).classList.add('on');
+    if (b.dataset.view === 'logs') loadLog();
+    if (b.dataset.view === 'backup') loadBackups();
+  }));
+
+  $('#btnAdd').addEventListener('click', () => openNode(null));
+  $('#btnApply').addEventListener('click', doApply);
+  $('#btnValidate').addEventListener('click', doValidate);
+  $('#btnPreview').addEventListener('click', openPreview);
+  $('#btnSaveNode').addEventListener('click', saveNode);
+  $('#btnReloadLog').addEventListener('click', loadLog);
+  $('#btnReloadBak').addEventListener('click', loadBackups);
+  $('#logSvc').addEventListener('change', loadLog);
+  $('#logLines').addEventListener('change', loadLog);
+
+  $('#btnRestart').addEventListener('click', async () => {
+    const svc = $('#logSvc').value;
+    if (!confirm('确认重启 ' + svc + ' 服务？')) return;
+    try {
+      const r = await api('/api/restart', {method:'POST', body:{service:svc}});
+      toast(r.ok ? '重启成功' : '重启后状态异常', r.ok ? 'ok' : 'err');
+      loadLog();
+      refresh();
+    } catch (e) { toast(e.message, 'err'); }
+  });
+
+  $('#btnPw').addEventListener('click', async () => {
+    const o = $('#pwOld').value, n1 = $('#pwNew').value, n2 = $('#pwNew2').value;
+    if (n1 !== n2) { toast('两次输入的新密码不一致', 'err'); return; }
+    try {
+      await api('/api/password', {method:'POST', body:{old:o, new:n1}});
+      toast('密码已修改，请重新登录', 'ok');
+      setTimeout(() => logout(false), 1200);
+    } catch (e) { toast(e.message, 'err'); }
+  });
+
+  // 节点列表事件委托
+  $('#nodeList').addEventListener('click', e => {
+    const ed = e.target.closest('[data-edit]');
+    if (ed) { openNode(ed.dataset.edit); return; }
+    const dl = e.target.closest('[data-del]');
+    if (dl) {
+      const uid = dl.dataset.del;
+      const n = S.nodes.find(x => x.uid === uid);
+      if (!confirm('确认删除节点「' + (n ? (n.remark || PROTO_LABEL(n.nodeType)) : uid) + '」？\n删除后需要点「部署到服务器」才会真正生效。')) return;
+      S.nodes = S.nodes.filter(x => x.uid !== uid);
+      renderNodes();
+      validate();
+      toast('已从列表移除，点「部署到服务器」生效');
+    }
+  });
+
+  // 全局字段
+  $$('[data-g]').forEach(el => {
+    el.addEventListener('input', validate);
+    el.addEventListener('change', validate);
+  });
+
+  // 关闭
+  $$('[data-close]').forEach(b => b.addEventListener('click', () => {
+    $('#' + b.dataset.close).classList.remove('on');
+  }));
+  $$('.mask').forEach(m => m.addEventListener('click', e => {
+    if (e.target === m) m.classList.remove('on');
+  }));
+
+  // 预览 tab
+  $$('#pvTabs button').forEach(b => b.addEventListener('click', () => {
+    $$('#pvTabs button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+    loadPreview(b.dataset.svc);
+  }));
+}
+
+/* ================= 启动 ================= */
+(async function init() {
+  bind();
+  if (!S.token) { $('#login').style.display = ''; return; }
+  try {
+    await boot();
+  } catch (e) {
+    $('#login').style.display = '';
+  }
+})();
+</script>
+</body>
+</html>
