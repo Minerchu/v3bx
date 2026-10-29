@@ -118,6 +118,7 @@ type Options struct {
 	SingOptions            *SingOptions    `json:"SingOptions"`
 	Hysteria2ConfigPath    string          `json:"Hysteria2ConfigPath"`
 	CertConfig             *CertConfig     `json:"CertConfig"`
+	OutboundConfig         *OutboundConfig `json:"OutboundConfig"`
 }
 
 func (o *Options) UnmarshalJSON(data []byte) error {
@@ -141,4 +142,16 @@ func (o *Options) UnmarshalJSON(data []byte) error {
 		o.RawOptions = data
 	}
 	return nil
+}
+
+type OutboundConfig struct {
+	Type   string        `json:"Type"`
+	Socks5 *Socks5Config `json:"Socks5"`
+}
+
+type Socks5Config struct {
+	Server   string `json:"Server"`
+	Port     int    `json:"Port"`
+	Username string `json:"Username"`
+	Password string `json:"Password"`
 }
