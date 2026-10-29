@@ -124,12 +124,12 @@ PROVIDER_FIELDS = {
     'cloudflare': {
         'label': 'Cloudflare',
         'groups': [
-            {'title': 'API Token（推荐）',
+            {'title': 'API Token（推荐，只填这一个就行）',
              'keys': ['CLOUDFLARE_DNS_API_TOKEN'],
              'hint': 'CF 后台 → 右上头像 → My Profile → API Tokens → Create Token，'
                      '权限选 <b>Zone → DNS → Edit</b>，Zone Resources 选包含该域名。'
                      '只填这一个就行。'},
-            {'title': '或者 Global API Key + 邮箱（旧方式，两个都要填）',
+            {'title': '或者 Global API Key + 账号邮箱（两个都要填）',
              'keys': ['CLOUDFLARE_API_KEY', 'CLOUDFLARE_EMAIL'],
              'hint': 'My Profile → API Keys → Global API Key。邮箱就是登录 CF 的账号邮箱。'},
         ],
