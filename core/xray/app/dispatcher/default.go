@@ -599,6 +599,13 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 		}
 	}
 
+	if handler == nil && inTag != "" {
+		// per-node exit: prefer the outbound that shares this inbound's tag,
+		// so each node can use its own direct / socks5 outbound.
+		if h := d.ohm.GetHandler(inTag); h != nil {
+			handler = h
+		}
+	}
 	if handler == nil {
 		handler = d.ohm.GetDefaultHandler()
 	}
