@@ -1126,19 +1126,24 @@ def validate_node(n, all_nodes, g):
             out.append({'level': 'error', 'field': 'cert.domain',
                         'msg': '启用 TLS 必须填域名。自签也要填——它决定证书的 CN/SAN，'
                                '和 Xboard 下发的 SNI 对不上客户端会握手失败'})
-        if mode in ('file', 'self'):
+        if mode == 'file':
+            # file 模式：用户自己指定证书文件，路径必须填且文件应该存在
             if not c.get('certFile') or not c.get('keyFile'):
                 out.append({'level': 'error', 'field': 'cert.certFile',
-                            'msg': '证书方式为文件/自签时，必须填证书和私钥路径'})
-            elif mode == 'file':
+                            'msg': '证书方式为「使用已有证书文件」时，必须填证书和私钥路径'})
+            else:
                 if not Path(c['certFile']).exists():
                     out.append({'level': 'warn', 'field': 'cert.certFile',
                                 'msg': f'证书文件 <code>{c["certFile"]}</code> 当前不存在，部署前请先申请'})
                 if not Path(c['keyFile']).exists():
                     out.append({'level': 'warn', 'field': 'cert.keyFile',
                                 'msg': f'私钥文件 <code>{c["keyFile"]}</code> 当前不存在'})
-            else:  # self
-                info = cert_info(c.get('certFile'))
+        elif mode == 'self':
+            # self 模式：路径由部署时 ensure_self_cert 自动填充，新建节点时
+            # certFile 是空的，不应该报 error 卡住保存。只在路径已有值时检查状态。
+            cf = c.get('certFile') or ''
+            if cf:
+                info = cert_info(cf, c.get('domain'))
                 if info['state'] == 'missing':
                     out.append({'level': 'info', 'field': 'cert.certFile',
                                 'msg': '自签证书还没生成，部署时面板会自动补一张'
@@ -1151,6 +1156,10 @@ def validate_node(n, all_nodes, g):
                     out.append({'level': 'warn', 'field': 'cert.certFile',
                                 'msg': f'证书里的域名（{info["cn"]}）和当前填的 '
                                        f'<code>{c.get("domain")}</code> 不一致，客户端会报 SNI 不匹配'})
+            else:
+                out.append({'level': 'info', 'field': 'cert.certFile',
+                            'msg': '自签证书还没生成，部署时面板会自动补一张'
+                                   '（也可以在节点页点「生成自签证书」立刻生成）'})
         if mode == 'dns':
             prov = c.get('provider')
             if not prov:
