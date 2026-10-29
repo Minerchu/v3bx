@@ -20,6 +20,23 @@ plain='\033[0m'
 REPO="Minerchu/v3bx"
 SCRIPT_URL="https://raw.githubusercontent.com/${REPO}/main"
 
+# 下载仓库里的文件。
+# raw.githubusercontent.com 有 Cache-Control: max-age=300 的 CDN 缓存，且忽略 query
+# 参数，改完面板后 5 分钟内重装会拿到旧文件（实测 x-cache: HIT）。优先走 GitHub API
+# 的 raw 模式（无缓存），失败再退回 raw CDN。
+_dl_repo_file() {
+    local out="$1" path="$2" sz
+    if curl -fsSL --max-time 20 -H "Accept: application/vnd.github.raw" \
+        "https://api.github.com/repos/${REPO}/contents/${path}?ref=main" -o "$out" 2>/dev/null; then
+        sz=$(wc -c < "$out" 2>/dev/null || echo 0)
+        # API 报错时返回的是 JSON（几百字节），用体积挡掉
+        if [[ ${sz:-0} -gt 2000 ]]; then
+            return 0
+        fi
+    fi
+    curl -fsSL --max-time 30 -o "$out" "${SCRIPT_URL}/${path}"
+}
+
 cur_dir=$(pwd)
 
 # check root
@@ -179,7 +196,7 @@ install_panel() {
     local tmp rc
     tmp=$(mktemp -d)
     for f in panel.py ui.html install.sh; do
-        if ! curl -fsSL -o "${tmp}/${f}" "${SCRIPT_URL}/panel/${f}?t=$(date +%s)"; then
+        if ! _dl_repo_file "${tmp}/${f}" "panel/${f}"; then
             echo -e "${red}下载 ${f} 失败，稍后可用 v3bx panel install 重试${plain}"
             rm -rf "$tmp"
             return 1
@@ -206,7 +223,7 @@ update_panel_files() {
     local tmp changed=0
     tmp=$(mktemp -d)
     for f in panel.py ui.html; do
-        curl -fsSL -o "${tmp}/${f}" "${SCRIPT_URL}/panel/${f}?t=$(date +%s)" || { rm -rf "$tmp"; return 0; }
+        _dl_repo_file "${tmp}/${f}" "panel/${f}" || { rm -rf "$tmp"; return 0; }
     done
     cmp -s "${tmp}/panel.py" /opt/v2bx-panel/panel.py || changed=1
     cmp -s "${tmp}/ui.html"  /opt/v2bx-panel/ui.html  || changed=1
