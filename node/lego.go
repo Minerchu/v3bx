@@ -150,7 +150,7 @@ func (l *Lego) CheckCert(file []byte) (bool, error) {
 }
 func (l *Lego) parseParams(path string) string {
 	r := strings.NewReplacer("{domain}", l.config.CertDomain,
-		"{email}", l.acmeEmail)
+		"{email}", l.config.Email)
 	return r.Replace(path)
 }
 func (l *Lego) writeCert(certificates *certificate.Resource) error {
