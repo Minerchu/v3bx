@@ -1,8 +1,6 @@
 package node
 
 import (
-	"strconv"
-
 	"github.com/InazumaV/V2bX/api/panel"
 	log "github.com/sirupsen/logrus"
 )
@@ -59,25 +57,35 @@ func (c *Controller) reportUserTrafficTask() (err error) {
 	return nil
 }
 
-func compareUserList(old, new []panel.UserInfo) (deleted, added []panel.UserInfo) {
-	oldMap := make(map[string]int)
-	for i, user := range old {
-		key := user.Uuid + strconv.Itoa(user.SpeedLimit)
-		oldMap[key] = i
+// compareUserList 比对两批用户，分成 删除 / 新增 / 变更 三类。
+//
+// 老实现用 uuid + SpeedLimit 拼 key，等于把「改了限速的用户」判成
+// 「删掉旧的 + 加个新的」——DelUsers 会把这个用户所有链路 CloseAll，
+// 用户侧表现就是改个限速、或者后台刷新一次用户列表就断流。
+//
+// 现在按 uuid 比对，限速/设备数变化单独归到 modified，走热更新路径：
+// 只换限速桶、改设备数，连接不动。
+func compareUserList(old, new []panel.UserInfo) (deleted, added, modified []panel.UserInfo) {
+	oldMap := make(map[string]panel.UserInfo, len(old))
+	for _, u := range old {
+		oldMap[u.Uuid] = u
 	}
 
-	for _, user := range new {
-		key := user.Uuid + strconv.Itoa(user.SpeedLimit)
-		if _, exists := oldMap[key]; !exists {
-			added = append(added, user)
-		} else {
-			delete(oldMap, key)
+	for _, u := range new {
+		o, ok := oldMap[u.Uuid]
+		if !ok {
+			added = append(added, u)
+			continue
 		}
+		if o.SpeedLimit != u.SpeedLimit || o.DeviceLimit != u.DeviceLimit {
+			modified = append(modified, u)
+		}
+		delete(oldMap, u.Uuid)
 	}
 
-	for _, index := range oldMap {
-		deleted = append(deleted, old[index])
+	for _, o := range oldMap {
+		deleted = append(deleted, o)
 	}
 
-	return deleted, added
+	return deleted, added, modified
 }

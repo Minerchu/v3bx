@@ -2,11 +2,9 @@ package rate
 
 import (
 	"net"
-
-	"github.com/juju/ratelimit"
 )
 
-func NewConnRateLimiter(c net.Conn, l *ratelimit.Bucket) *Conn {
+func NewConnRateLimiter(c net.Conn, l *DynamicBucket) *Conn {
 	return &Conn{
 		Conn:    c,
 		limiter: l,
@@ -15,13 +13,15 @@ func NewConnRateLimiter(c net.Conn, l *ratelimit.Bucket) *Conn {
 
 type Conn struct {
 	net.Conn
-	limiter *ratelimit.Bucket
+	limiter *DynamicBucket
 }
 
 func (c *Conn) Read(b []byte) (n int, err error) {
 	n, err = c.Conn.Read(b)
 	if n > 0 {
-		c.limiter.Wait(int64(n))
+		if l := c.limiter.Get(); l != nil {
+			l.Wait(int64(n))
+		}
 	}
 	return n, err
 }
@@ -29,7 +29,9 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 func (c *Conn) Write(b []byte) (n int, err error) {
 	n, err = c.Conn.Write(b)
 	if n > 0 {
-		c.limiter.Wait(int64(n))
+		if l := c.limiter.Get(); l != nil {
+			l.Wait(int64(n))
+		}
 	}
 	return n, err
 }

@@ -16,3 +16,8 @@ output/*
 .idea/*
 newV2bX.sh
 quic_singbox.sh
+
+# 测试过程生成的临时证书
+node/*.key
+node/*.pem
+node/cert/

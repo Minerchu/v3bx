@@ -9,8 +9,8 @@ import (
 
 	"github.com/InazumaV/V2bX/api/panel"
 	"github.com/InazumaV/V2bX/common/format"
+	"github.com/InazumaV/V2bX/common/rate"
 	"github.com/InazumaV/V2bX/conf"
-	"github.com/juju/ratelimit"
 )
 
 var limitLock sync.RWMutex
@@ -28,8 +28,33 @@ type Limiter struct {
 	OldUserOnline *sync.Map      // Key: Ip, value: Uid
 	UUIDtoUID     map[string]int // Key: UUID, value: Uid
 	UserLimitInfo *sync.Map      // Key: TagUUID value: UserLimitInfo
-	SpeedLimiter  *sync.Map      // key: TagUUID, value: *ratelimit.Bucket
+	SpeedLimiter  *sync.Map      // key: TagUUID, value: *rate.DynamicBucket
 	AliveList     map[int]int    // Key: Uid, value: alive_ip
+
+	// AliveList 是普通 map，被定时任务整体替换、被每个新连接读。
+	// 不加锁的话，"定时刷新 + 用户连入"同时发生就是
+	// concurrent map read and map write，进程直接 fatal。
+	aliveLock sync.RWMutex
+}
+
+// SetAliveList 整体替换在线设备数快照。
+func (l *Limiter) SetAliveList(alive map[int]int) {
+	l.aliveLock.Lock()
+	l.AliveList = alive
+	l.aliveLock.Unlock()
+}
+
+// getAlive 读取某个用户的在线设备数。
+func (l *Limiter) getAlive(uid int) int {
+	l.aliveLock.RLock()
+	defer l.aliveLock.RUnlock()
+	return l.AliveList[uid]
+}
+
+func (l *Limiter) deleteAlive(uid int) {
+	l.aliveLock.Lock()
+	delete(l.AliveList, uid)
+	l.aliveLock.Unlock()
 }
 
 type UserLimitInfo struct {
@@ -87,13 +112,46 @@ func DeleteLimiter(tag string) {
 	limitLock.Unlock()
 }
 
-func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel.UserInfo) {
+// UpdateUser 增量更新用户状态。
+//
+// modified 是「同一个 UUID、限速或设备数变了」的用户。老版本把它们当成
+// 删除 + 新增处理，于是 DelUsers 会把该用户的所有链路 CloseAll 掉，
+// 表现出来就是「后台改个限速，正在用的连接全断」。现在这类用户走热更新：
+// 只改限速桶的速率和设备数，连接不动。
+func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel.UserInfo, modified []panel.UserInfo) {
 	for i := range deleted {
 		l.UserLimitInfo.Delete(format.UserTag(tag, deleted[i].Uuid))
 		l.UserOnlineIP.Delete(format.UserTag(tag, deleted[i].Uuid))
 		l.SpeedLimiter.Delete(format.UserTag(tag, deleted[i].Uuid))
 		delete(l.UUIDtoUID, deleted[i].Uuid)
-		delete(l.AliveList, deleted[i].Id)
+		l.deleteAlive(deleted[i].Id)
+	}
+	for i := range modified {
+		taguuid := format.UserTag(tag, modified[i].Uuid)
+		if v, ok := l.UserLimitInfo.Load(taguuid); ok {
+			u := v.(*UserLimitInfo)
+			u.SpeedLimit = modified[i].SpeedLimit
+			u.DeviceLimit = modified[i].DeviceLimit
+			l.UserLimitInfo.Store(taguuid, u)
+		} else {
+			l.UserLimitInfo.Store(taguuid, &UserLimitInfo{
+				UID:         modified[i].Id,
+				SpeedLimit:  modified[i].SpeedLimit,
+				DeviceLimit: modified[i].DeviceLimit,
+			})
+			l.UUIDtoUID[modified[i].Uuid] = modified[i].Id
+		}
+		// 原地换桶，已建立的连接不受影响
+		limit := int64(determineSpeedLimit(l.SpeedLimit, modified[i].SpeedLimit)) * 1000000 / 8
+		if limit > 0 {
+			if v, ok := l.SpeedLimiter.Load(taguuid); ok {
+				v.(*rate.DynamicBucket).Update(limit)
+			} else {
+				l.SpeedLimiter.Store(taguuid, rate.NewDynamicBucket(limit))
+			}
+		} else {
+			l.SpeedLimiter.Delete(taguuid)
+		}
 	}
 	for i := range added {
 		userLimit := &UserLimitInfo{
@@ -123,7 +181,11 @@ func (l *Limiter) UpdateDynamicSpeedLimit(tag, uuid string, limit int, expire ti
 	return nil
 }
 
-func (l *Limiter) CheckLimit(taguuid string, ip string, isTcp bool, noSSUDP bool) (Bucket *ratelimit.Bucket, Reject bool) {
+// CheckLimit 检查设备数限制并返回该用户的限速桶。
+//
+// noSSUDP 为 true 时把这次连接计入在线设备数（UDP 源端口多变，
+// shadowsocks / hysteria2 这类协议不能按 UDP 计入）。
+func (l *Limiter) CheckLimit(taguuid string, ip string, noSSUDP bool) (Bucket *rate.DynamicBucket, Reject bool) {
 	// check if ipv4 mapped ipv6
 	ip = strings.TrimPrefix(ip, "::ffff:")
 
@@ -154,7 +216,7 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, isTcp bool, noSSUDP bool
 		// Store online user for device limit
 		newipMap := new(sync.Map)
 		newipMap.Store(ip, uid)
-		aliveIp := l.AliveList[uid]
+		aliveIp := l.getAlive(uid)
 		// If any device is online
 		if v, loaded := l.UserOnlineIP.LoadOrStore(taguuid, newipMap); loaded {
 			oldipMap := v.(*sync.Map)
@@ -187,13 +249,16 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, isTcp bool, noSSUDP bool
 
 	limit := int64(determineSpeedLimit(nodeLimit, userLimit)) * 1000000 / 8 // If you need the Speed limit
 	if limit > 0 {
-		Bucket = ratelimit.NewBucketWithQuantum(time.Second, limit, limit) // Byte/s
-		if v, ok := l.SpeedLimiter.LoadOrStore(taguuid, Bucket); ok {
-			return v.(*ratelimit.Bucket), false
-		} else {
-			l.SpeedLimiter.Store(taguuid, Bucket)
-			return Bucket, false
+		// 先查后建：老实现每次连接都 NewBucketWithQuantum 再 LoadOrStore，
+		// 桶已存在时白白分配一个带满额令牌的对象，高并发下是纯浪费。
+		if v, ok := l.SpeedLimiter.Load(taguuid); ok {
+			return v.(*rate.DynamicBucket), false
 		}
+		d := rate.NewDynamicBucket(limit)
+		if v, ok := l.SpeedLimiter.LoadOrStore(taguuid, d); ok {
+			return v.(*rate.DynamicBucket), false
+		}
+		return d, false
 	} else {
 		return nil, false
 	}

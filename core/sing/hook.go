@@ -35,7 +35,7 @@ func (h *HookServer) RoutedConnection(_ context.Context, conn net.Conn, m adapte
 	}
 	taguuid := format.UserTag(m.Inbound, m.User)
 	ip := m.Source.Addr.String()
-	if b, r := l.CheckLimit(taguuid, ip, true, true); r {
+	if b, r := l.CheckLimit(taguuid, ip, true); r {
 		conn.Close()
 		log.Error("[", m.Inbound, "] ", "Limited ", m.User, " by ip or conn")
 		return conn
@@ -83,7 +83,7 @@ func (h *HookServer) RoutedPacketConnection(_ context.Context, conn N.PacketConn
 	}
 	ip := m.Source.Addr.String()
 	taguuid := format.UserTag(m.Inbound, m.User)
-	if b, r := l.CheckLimit(taguuid, ip, false, false); r {
+	if b, r := l.CheckLimit(taguuid, ip, false); r {
 		conn.Close()
 		log.Error("[", m.Inbound, "] ", "Limited ", m.User, " by ip or conn")
 		return conn
