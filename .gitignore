@@ -21,3 +21,6 @@ quic_singbox.sh
 node/*.key
 node/*.pem
 node/cert/
+
+# 本地编译产物
+build/

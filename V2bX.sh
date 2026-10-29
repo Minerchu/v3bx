@@ -393,6 +393,19 @@ show_status() {
         2)
             echo -e "V2bX状态: ${red}未安装${plain}"
     esac
+    show_panel_status
+}
+
+show_panel_status() {
+    if ! panel_installed; then
+        echo -e "面板状态: ${yellow}未安装${plain}（菜单 17 可安装）"
+        return
+    fi
+    if panel_running; then
+        echo -e "面板状态: ${green}已运行${plain}  端口 ${green}$(panel_port)${plain}  $(panel_addr)"
+    else
+        echo -e "面板状态: ${red}未运行${plain}  端口 $(panel_port)"
+    fi
 }
 
 show_enable_status() {
@@ -943,6 +956,239 @@ open_ports() {
     echo -e "${green}放开防火墙端口成功！${plain}"
 }
 
+# ---------- 节点管理面板 ----------
+PANEL_APP_DIR=/opt/v2bx-panel
+PANEL_CONF_DIR=/etc/v2bx-panel
+PANEL_ENV=${PANEL_CONF_DIR}/panel.env
+PANEL_SVC=v2bx-panel
+
+panel_installed() {
+    [[ -f ${PANEL_APP_DIR}/panel.py ]]
+}
+
+panel_env_get() {
+    local key="$1" def="$2" v=""
+    [[ -f ${PANEL_ENV} ]] && v=$(grep -E "^${key}=" "${PANEL_ENV}" 2>/dev/null | head -1 | cut -d= -f2-)
+    [[ -z "${v}" ]] && v="${def}"
+    echo "${v}"
+}
+
+panel_env_set() {
+    local key="$1" val="$2"
+    [[ -f ${PANEL_ENV} ]] || return 1
+    if grep -qE "^${key}=" "${PANEL_ENV}"; then
+        sed -i "s|^${key}=.*|${key}=${val}|" "${PANEL_ENV}"
+    else
+        echo "${key}=${val}" >> "${PANEL_ENV}"
+    fi
+}
+
+panel_running() {
+    systemctl is-active --quiet ${PANEL_SVC} 2>/dev/null
+}
+
+panel_port() { panel_env_get PANEL_PORT 18080; }
+panel_user() { panel_env_get PANEL_USER admin; }
+
+# 面板访问地址：绑定 127.0.0.1 时提示走 SSH 隧道，否则取公网 IP
+# 公网 IP 缓存 10 分钟，避免每次刷新菜单都请求一次
+panel_addr() {
+    local bind port ip cache=/tmp/.v2bx_panel_ip
+    bind=$(panel_env_get PANEL_BIND 0.0.0.0)
+    port=$(panel_port)
+    if [[ "${bind}" == "127.0.0.1" || "${bind}" == "localhost" ]]; then
+        echo "http://127.0.0.1:${port}/  (仅本机，需 SSH 隧道)"
+        return
+    fi
+    if [[ -f ${cache} ]] && [[ $(( $(date +%s) - $(stat -c %Y ${cache} 2>/dev/null || echo 0) )) -lt 600 ]]; then
+        ip=$(cat ${cache} 2>/dev/null)
+    fi
+    if [[ -z "${ip}" ]]; then
+        ip=$(curl -s4 --max-time 3 https://api.ipify.org 2>/dev/null)
+        if [[ -n "${ip}" ]]; then
+            echo "${ip}" > ${cache} 2>/dev/null && chmod 600 ${cache} 2>/dev/null
+        fi
+    fi
+    [[ -z "${ip}" ]] && ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    [[ -z "${ip}" ]] && ip="<本机IP>"
+    echo "http://${ip}:${port}/"
+}
+
+# 初始密码文件里记录的明文密码（改过密码后该文件就不准了）
+panel_password_hint() {
+    local f=${PANEL_CONF_DIR}/INITIAL_PASSWORD.txt
+    [[ -f "$f" ]] || return
+    grep -E '^密码' "$f" 2>/dev/null | head -1 | sed 's/^密码 *: *//'
+}
+
+panel_info() {
+    if ! panel_installed; then
+        echo -e "${yellow}面板未安装${plain}，选择 8 可一键安装"
+        return 1
+    fi
+    local st pw
+    if panel_running; then st="${green}已运行${plain}"; else st="${red}未运行${plain}"; fi
+    echo "————————————————————————"
+    echo -e " 状态     : ${st}"
+    echo -e " 访问地址 : ${green}$(panel_addr)${plain}"
+    echo -e " 监听     : $(panel_env_get PANEL_BIND 0.0.0.0):$(panel_port)"
+    echo -e " 用户名   : ${green}$(panel_user)${plain}"
+    pw=$(panel_password_hint)
+    if [[ -n "${pw}" ]]; then
+        echo -e " 密码     : ${green}${pw}${plain} ${yellow}(初始密码)${plain}"
+    else
+        echo -e " 密码     : ${yellow}已修改，无法查看，可用 7 重置${plain}"
+    fi
+    echo -e " 配置文件 : ${PANEL_ENV}"
+    echo -e " 服务名   : ${PANEL_SVC}"
+    echo "————————————————————————"
+}
+
+panel_set_port() {
+    local cur new
+    cur=$(panel_port)
+    echo -e "当前端口: ${green}${cur}${plain}"
+    read -rp "新端口 [1-65535，直接回车取消]: " new
+    [[ -z "${new}" ]] && return
+    if ! [[ "${new}" =~ ^[0-9]+$ ]] || (( new < 1 || new > 65535 )); then
+        echo -e "${red}端口不合法${plain}"
+        return 1
+    fi
+    if ss -lntp 2>/dev/null | grep -q ":${new} "; then
+        echo -e "${red}端口 ${new} 已被占用${plain}"
+        return 1
+    fi
+    panel_env_set PANEL_PORT "${new}"
+    systemctl restart ${PANEL_SVC}
+    sleep 1
+    if panel_running; then
+        echo -e "${green}端口已改为 ${new}${plain}"
+        echo -e "访问地址: ${green}$(panel_addr)${plain}"
+        echo -e "${yellow}如果之前放行过旧端口，记得同步放行 ${new}（安全组 / 1PANEL_BASIC / ufw）${plain}"
+    else
+        panel_env_set PANEL_PORT "${cur}"
+        systemctl restart ${PANEL_SVC}
+        echo -e "${red}启动失败，已回滚到 ${cur}${plain}"
+        echo -e "查看日志: journalctl -u ${PANEL_SVC} -n 50 --no-pager"
+    fi
+}
+
+panel_reset_password() {
+    local pw
+    read -rsp "新密码（至少 8 位，直接回车自动生成）: " pw
+    echo
+    if [[ -z "${pw}" ]]; then
+        pw=$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 16)
+    fi
+    if [[ ${#pw} -lt 8 ]]; then
+        echo -e "${red}密码太短${plain}"
+        return 1
+    fi
+    panel_env_set PANEL_PASSWORD "${pw}"
+    rm -f ${PANEL_CONF_DIR}/auth.json
+    systemctl restart ${PANEL_SVC}
+    sleep 1
+    if panel_running; then
+        echo -e "${green}密码已重置${plain}"
+        echo -e " 用户名: ${green}$(panel_user)${plain}"
+        echo -e " 密码  : ${green}${pw}${plain}"
+    else
+        echo -e "${red}重启失败，查看日志: journalctl -u ${PANEL_SVC} -n 50${plain}"
+    fi
+}
+
+panel_install() {
+    local tmp port user pw
+    if panel_installed; then
+        echo -e "${yellow}已安装，将保留现有端口/账号/密码进行覆盖升级${plain}"
+    fi
+    port=$(panel_port)
+    user=$(panel_user)
+    pw=$(panel_env_get PANEL_PASSWORD "")
+    tmp=$(mktemp -d)
+    echo -e "${yellow}下载面板源码...${plain}"
+    if ! curl -fL --max-time 180 -o "${tmp}/p.tar.gz" \
+        https://github.com/Minerchu/v3bx/archive/refs/heads/main.tar.gz; then
+        echo -e "${red}下载失败，检查网络或稍后重试${plain}"
+        rm -rf "${tmp}"
+        return 1
+    fi
+    tar xzf "${tmp}/p.tar.gz" -C "${tmp}" 2>/dev/null
+    if [[ ! -f "${tmp}/v3bx-main/panel/install.sh" ]]; then
+        echo -e "${red}安装包结构异常，未找到 panel/install.sh${plain}"
+        rm -rf "${tmp}"
+        return 1
+    fi
+    if [[ -n "${pw}" && ${#pw} -ge 8 ]]; then
+        PANEL_PORT=${port} PANEL_USER=${user} PANEL_PASSWORD=${pw} bash "${tmp}/v3bx-main/panel/install.sh"
+    else
+        PANEL_PORT=${port} PANEL_USER=${user} bash "${tmp}/v3bx-main/panel/install.sh"
+    fi
+    rm -rf "${tmp}"
+}
+
+panel_uninstall() {
+    local yn
+    read -rp "确认卸载面板？配置与备份一并删除 [y/N]: " yn
+    [[ "${yn}" != "y" && "${yn}" != "Y" ]] && return
+    systemctl disable --now ${PANEL_SVC} >/dev/null 2>&1
+    rm -f /etc/systemd/system/${PANEL_SVC}.service
+    systemctl daemon-reload
+    rm -rf ${PANEL_APP_DIR} ${PANEL_CONF_DIR}
+    echo -e "${green}面板已卸载，V2bX 与节点服务不受影响${plain}"
+}
+
+panel_menu() {
+    while true; do
+        echo
+        echo -e "${green}———————— 节点管理面板 ————————${plain}"
+        show_panel_status
+        echo -e "  ${green}1.${plain} 查看面板信息（地址/账号/密码）"
+        echo -e "  ${green}2.${plain} 启动面板"
+        echo -e "  ${green}3.${plain} 停止面板"
+        echo -e "  ${green}4.${plain} 重启面板"
+        echo -e "  ${green}5.${plain} 查看面板日志"
+        echo -e "  ${green}6.${plain} 修改监听端口"
+        echo -e "  ${green}7.${plain} 重置登录密码"
+        echo -e "  ${green}8.${plain} 安装 / 更新面板"
+        echo -e "  ${green}9.${plain} 卸载面板"
+        echo -e "  ${green}0.${plain} 返回主菜单"
+        echo "————————————————————————"
+        read -rp "请输入选择 [0-9]: " pnum
+        case "${pnum}" in
+            1) panel_info ;;
+            2) systemctl start ${PANEL_SVC} && echo -e "${green}已启动${plain}" || echo -e "${red}启动失败${plain}" ;;
+            3) systemctl stop ${PANEL_SVC} && echo -e "${green}已停止${plain}" || echo -e "${red}停止失败${plain}" ;;
+            4) systemctl restart ${PANEL_SVC} && echo -e "${green}已重启${plain}" || echo -e "${red}重启失败${plain}" ;;
+            5) journalctl -u ${PANEL_SVC} -n 80 --no-pager ;;
+            6) panel_set_port ;;
+            7) panel_reset_password ;;
+            8) panel_install ;;
+            9) panel_uninstall ;;
+            0) return ;;
+            *) echo -e "${red}请输入正确的数字 [0-9]${plain}" ;;
+        esac
+        echo
+        read -rp "按回车继续: " _
+    done
+}
+
+# 命令行入口: V2bX panel [info|start|stop|restart|log|port|passwd|install|uninstall]
+panel_cli() {
+    case "$1" in
+        ""|info|status) panel_info ;;
+        start)   systemctl start ${PANEL_SVC}   && echo -e "${green}已启动${plain}" ;;
+        stop)    systemctl stop ${PANEL_SVC}    && echo -e "${green}已停止${plain}" ;;
+        restart) systemctl restart ${PANEL_SVC} && echo -e "${green}已重启${plain}" ;;
+        log)     journalctl -u ${PANEL_SVC} -n 80 --no-pager ;;
+        port)    panel_set_port ;;
+        passwd)  panel_reset_password ;;
+        install|update) panel_install ;;
+        uninstall)      panel_uninstall ;;
+        *) echo "用法: V2bX panel [info|start|stop|restart|log|port|passwd|install|uninstall]" ;;
+    esac
+}
+
 show_usage() {
     echo "V2bX 管理脚本使用方法: "
     echo "------------------------------------------"
@@ -961,6 +1207,16 @@ show_usage() {
     echo "V2bX install      - 安装 V2bX"
     echo "V2bX uninstall    - 卸载 V2bX"
     echo "V2bX version      - 查看 V2bX 版本"
+    echo "------------------------------------------"
+    echo "V2bX panel        - 面板信息（地址/账号/端口）"
+    echo "V2bX panel start  - 启动面板"
+    echo "V2bX panel stop   - 停止面板"
+    echo "V2bX panel restart- 重启面板"
+    echo "V2bX panel log    - 查看面板日志"
+    echo "V2bX panel port   - 修改面板端口"
+    echo "V2bX panel passwd - 重置面板密码"
+    echo "V2bX panel install- 安装/更新面板"
+    echo "V2bX panel uninstall - 卸载面板"
     echo "------------------------------------------"
 }
 
@@ -990,11 +1246,13 @@ show_menu() {
   ${green}14.${plain} 升级 V2bX 维护脚本
   ${green}15.${plain} 生成 V2bX 配置文件
   ${green}16.${plain} 放行 VPS 的所有网络端口
-  ${green}17.${plain} 退出脚本
+————————————————
+  ${green}17.${plain} 节点管理面板（端口/账号/日志）
+  ${green}18.${plain} 退出脚本
  "
  #后续更新可加入上方字符串中
     show_status
-    echo && read -rp "请输入选择 [0-17]: " num
+    echo && read -rp "请输入选择 [0-18]: " num
 
     case "${num}" in
         0) config ;;
@@ -1014,8 +1272,9 @@ show_menu() {
         14) update_shell ;;
         15) generate_config_file ;;
         16) open_ports ;;
-        17) exit ;;
-        *) echo -e "${red}请输入正确的数字 [0-16]${plain}" ;;
+        17) panel_menu ;;
+        18) exit ;;
+        *) echo -e "${red}请输入正确的数字 [0-18]${plain}" ;;
     esac
 }
 
@@ -1036,6 +1295,7 @@ if [[ $# > 0 ]]; then
         "uninstall") check_install 0 && uninstall 0 ;;
         "x25519") check_install 0 && generate_x25519_key 0 ;;
         "version") check_install 0 && show_V2bX_version 0 ;;
+        "panel") panel_cli $2 ;;
         "update_shell") update_shell ;;
         *) show_usage
     esac

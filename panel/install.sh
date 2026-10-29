@@ -163,6 +163,9 @@ echo "  常用命令:"
 echo "    systemctl status ${SERVICE}"
 echo "    journalctl -u ${SERVICE} -f"
 echo "    systemctl restart ${SERVICE}"
+echo "--------------------------------------------------------"
+echo "  也可以进 V2bX 管理菜单 → 17 节点管理面板"
+echo "  （查看端口/账号、启停、改端口、重置密码、卸载）"
 echo "========================================================"
 echo
 

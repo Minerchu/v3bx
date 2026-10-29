@@ -41,7 +41,7 @@ cp /usr/local/V2bX-backup/V2bX.<时间戳> /usr/local/V2bX/V2bX && systemctl res
 和官方完全一致（大小写不敏感）：
 
 ```bash
-V2bX              # 管理菜单（0-17）
+V2bX              # 管理菜单（0-18）
 V2bX start        # 启动
 V2bX stop         # 停止
 V2bX restart      # 重启
@@ -56,6 +56,42 @@ V2bX version      # 版本
 V2bX generate     # 重新生成配置文件
 V2bX x25519       # 生成 x25519 密钥
 ```
+
+### 面板管理
+
+管理菜单 **17** 是节点管理面板的入口，主菜单底部也会直接显示面板状态和端口，不用再翻 `/etc/v2bx-panel/panel.env`：
+
+```
+面板状态: 已运行  端口 18080  http://1.2.3.4:18080/
+```
+
+进去之后：
+
+| 选项 | 作用 |
+|---|---|
+| 1 | 查看面板信息（访问地址、监听、用户名、密码、配置文件路径） |
+| 2 / 3 / 4 | 启动 / 停止 / 重启 |
+| 5 | 面板日志（journalctl，最近 80 行） |
+| 6 | 修改监听端口（自动检查占用，重启失败自动回滚） |
+| 7 | 重置登录密码（改完直接给出新密码，不用手动删 auth.json） |
+| 8 | 安装 / 更新面板（保留现有端口、账号、密码） |
+| 9 | 卸载面板 |
+
+也可以直接敲命令：
+
+```bash
+V2bX panel          # 面板信息
+V2bX panel start    # 启动
+V2bX panel stop     # 停止
+V2bX panel restart  # 重启
+V2bX panel log      # 日志
+V2bX panel port     # 改端口
+V2bX panel passwd   # 重置密码
+V2bX panel install  # 安装/更新
+V2bX panel uninstall# 卸载
+```
+
+> 密码只在首次安装时以明文写在 `/etc/v2bx-panel/INITIAL_PASSWORD.txt`。如果你在面板里改过密码，那个文件就过期了 —— 菜单里会显示「已修改，无法查看」，用选项 7 重置即可。
 
 ### 指定版本安装
 
