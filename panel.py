@@ -1609,6 +1609,21 @@ class Store:
             if made:
                 steps.append({'name': '生成自签证书', 'ok': True, 'detail': '、'.join(made)})
 
+            # 自签证书警告：客户端不跳过验证必然握手失败。
+            # 这是 hy2/trojan「服务端一切正常但客户端连不上」最常见的原因——
+            # 抓包里能看到客户端 UDP 包到达、服务端只回几十字节就断，就是 TLS 被拒。
+            for n in scope:
+                c = n.get('cert') or {}
+                if (c.get('mode') or 'none') != 'self':
+                    continue
+                _ci = cert_info(c.get('certFile'), c.get('domain'))
+                if _ci.get('self_signed'):
+                    errs.append({'level': 'warn', 'uid': n.get('uid'), 'field': 'cert.mode',
+                                 'msg': f'<code>{c.get("domain", "")}</code> 用的是<b>自签证书</b>：'
+                                        '客户端必须开启「跳过证书验证 / insecure / allowInsecure」，'
+                                        '否则一定握手失败、连不上。'
+                                        '想一劳永逸就改用「DNS-01」签一张真实证书。'})
+
             # ---- 3.6 sing 内核模板 ----
             # V2bX 的 sing 内核读 OriginalPath，文件不存在直接启动失败
             # （core/sing/sing.go:55 read original config error）。安装脚本一直
@@ -2017,7 +2032,7 @@ def normalize_cert(n):
 
 def cert_info(path, domain=None):
     """读证书状态：missing / ok / expiring / expired / mismatch"""
-    out = {'state': 'missing', 'notAfter': '', 'cn': '', 'days': None}
+    out = {'state': 'missing', 'notAfter': '', 'cn': '', 'issuer': '', 'days': None}
     if not path or not Path(path).exists():
         return out
     code, txt = run(['openssl', 'x509', '-in', str(path), '-noout',
@@ -2042,6 +2057,15 @@ def cert_info(path, domain=None):
     ms = re.search(r'subject=.*?CN\s*=\s*([^,\n/]+)', txt)
     if ms:
         out['cn'] = ms.group(1).strip()
+
+    # 单独取 issuer：判断是不是自签（issuer 与 subject 相同就是自签）。
+    # 自签证书客户端不跳过验证一定握手失败，这是 hy2/trojan 连不上最常见的原因。
+    code, itxt = run(['openssl', 'x509', '-in', str(path), '-noout', '-issuer'], timeout=10)
+    if code == 0 and itxt:
+        mi = re.search(r'CN\s*=\s*([^,\n/]+)', itxt)
+        out['issuer'] = mi.group(1).strip() if mi else ''
+    out['self_signed'] = bool(out['issuer'] and out['cn'] and
+                              out['issuer'].strip().lower() == out['cn'].strip().lower())
 
     if domain and out['state'] in ('ok', 'expiring'):
         code, san = run(['openssl', 'x509', '-in', str(path), '-noout',
