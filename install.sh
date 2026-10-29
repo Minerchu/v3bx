@@ -8,7 +8,7 @@
 #   本版：https://github.com/Minerchu/v3bx （原生支持 shadowsocks + shadow-tls v3）
 #
 # 用法：
-#   wget -N https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh && bash install.sh
+#   bash <(curl -fsSL "https://raw.githubusercontent.com/Minerchu/v3bx/main/install.sh?$(date +%s)")
 #   bash install.sh v1.1.0        # 安装指定版本
 #
 
@@ -179,7 +179,7 @@ install_panel() {
     local tmp rc
     tmp=$(mktemp -d)
     for f in panel.py ui.html install.sh; do
-        if ! curl -fsSL -o "${tmp}/${f}" "${SCRIPT_URL}/panel/${f}"; then
+        if ! curl -fsSL -o "${tmp}/${f}" "${SCRIPT_URL}/panel/${f}?t=$(date +%s)"; then
             echo -e "${red}下载 ${f} 失败，稍后可用 v3bx panel install 重试${plain}"
             rm -rf "$tmp"
             return 1
@@ -206,7 +206,7 @@ update_panel_files() {
     local tmp changed=0
     tmp=$(mktemp -d)
     for f in panel.py ui.html; do
-        curl -fsSL -o "${tmp}/${f}" "${SCRIPT_URL}/panel/${f}" || { rm -rf "$tmp"; return 0; }
+        curl -fsSL -o "${tmp}/${f}" "${SCRIPT_URL}/panel/${f}?t=$(date +%s)" || { rm -rf "$tmp"; return 0; }
     done
     cmp -s "${tmp}/panel.py" /opt/v2bx-panel/panel.py || changed=1
     cmp -s "${tmp}/ui.html"  /opt/v2bx-panel/ui.html  || changed=1
