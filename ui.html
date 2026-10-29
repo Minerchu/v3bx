@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>节点面板</title>
+<title>v3bx 节点面板</title>
 <style>
 :root{
   --bg:#0d1117; --bg2:#151b23; --bg3:#1c242e; --line:#26303c;
@@ -209,7 +209,7 @@ pre.log .g{color:var(--ok)}
 <div id="login">
   <div class="login-box">
     <h1>节点管理面板</h1>
-    <div class="sub">V2bX / sing-box 配置管理</div>
+    <div class="sub">v3bx 节点管理面板 · 对接、节点、证书全在网页里</div>
     <div class="f"><label>用户名</label><input id="lgUser" value="admin" autocomplete="username"></div>
     <div class="f"><label>密码</label><input id="lgPass" type="password" autocomplete="current-password" placeholder="首次密码见 /etc/v2bx-panel/INITIAL_PASSWORD.txt"></div>
     <button class="btn pri block" id="lgBtn">登 录</button>
@@ -220,8 +220,9 @@ pre.log .g{color:var(--ok)}
 <!-- ========== 主界面 ========== -->
 <div id="app" hidden>
   <header>
-    <div class="brand"><span class="dot"></span>节点面板</div>
+    <div class="brand"><span class="dot"></span>v3bx</div>
     <nav>
+      <button data-view="connect">对接</button>
       <button data-view="nodes" class="on">节点</button>
       <button data-view="logs">日志</button>
       <button data-view="backup">备份</button>
@@ -233,6 +234,58 @@ pre.log .g{color:var(--ok)}
   </header>
 
   <main>
+    <!-- 对接 -->
+    <section class="view" id="v-connect">
+      <div class="bar">
+        <h2>对接面板</h2>
+        <button class="btn sm" id="btnConnTest">测试连接</button>
+        <button class="btn pri sm" id="btnConnSave">保存并重启</button>
+      </div>
+
+      <div style="background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:14px 16px;margin-bottom:16px">
+        <div class="grid2">
+          <div class="f" style="margin:0">
+            <label>面板地址 <span class="req">*</span></label>
+            <input id="cnHost" placeholder="https://panel.example.com" autocomplete="off" spellcheck="false">
+            <div class="hint">Xboard 面板根地址，不带 /api</div>
+          </div>
+          <div class="f" style="margin:0">
+            <label>API Key <span class="req">*</span></label>
+            <input id="cnKey" type="password" placeholder="节点通讯密钥" autocomplete="new-password">
+            <div class="hint" id="cnKeyHint">面板「系统设置 → 节点通讯密钥」</div>
+          </div>
+        </div>
+        <div class="grid2" style="margin-top:12px">
+          <div class="f" style="margin:0">
+            <label>内核</label>
+            <select id="cnCore">
+              <option value="sing">sing（推荐，协议支持最全）</option>
+              <option value="xray">xray</option>
+            </select>
+          </div>
+          <div class="f" style="margin:0">
+            <label>服务状态</label>
+            <div id="cnSvc" style="font-family:var(--mono);font-size:12.5px;padding-top:8px">—</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bar" style="margin-top:22px">
+        <h2>节点 <span class="cnt" id="cnCnt">0</span></h2>
+        <button class="btn sm" id="btnConnAdd">+ 添加节点</button>
+      </div>
+      <div id="cnTpl" style="display:none;margin:-4px 0 12px;padding:9px 12px;
+           border-radius:7px;background:rgba(210,153,34,.1);
+           border:1px solid rgba(210,153,34,.35);color:var(--warn);font-size:12.5px"></div>
+      <div class="hint" style="margin:-10px 0 12px;font-size:12px;color:var(--dim2);line-height:1.6">
+        ID 对应面板「节点管理」列表里的 ID。端口、密码、协议参数全部由面板下发，这里只声明这台机器跑哪几个节点。<br>
+        点「保存并重启」时会先逐个探测：探测通了就把面板下发的 SNI 自动填进节点域名，并顺手补一张自签证书，
+        所以新机器不用再回「节点」页手动配一遍。
+      </div>
+      <div id="cnList"></div>
+      <div id="cnResult" style="margin-top:14px"></div>
+    </section>
+
     <!-- 节点 -->
     <section class="view on" id="v-nodes">
       <div class="bar">
@@ -240,6 +293,9 @@ pre.log .g{color:var(--ok)}
         <button class="btn sm" id="btnPreview">查看配置</button>
         <button class="btn pri sm" id="btnAdd">+ 添加节点</button>
       </div>
+
+      <div id="portBar" style="margin-bottom:12px;font-family:var(--mono);font-size:12px;
+           color:var(--dim);line-height:1.9"></div>
 
       <div id="globalBox" style="background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:14px 16px;margin-bottom:16px">
         <div class="grid3">
@@ -252,7 +308,7 @@ pre.log .g{color:var(--ok)}
             <input data-g="apiKey" type="password" placeholder="面板通讯密钥">
           </div>
           <div class="f" style="margin:0">
-            <label>V2bX 内核</label>
+            <label>v3bx 内核</label>
             <select data-g="core">
               <option value="sing">sing（推荐，支持协议多）</option>
               <option value="xray">xray</option>
@@ -268,6 +324,16 @@ pre.log .g{color:var(--ok)}
               <option value="debug">日志 debug</option>
             </select>
           </div>
+          <div class="f" style="margin:0;width:130px">
+            <select id="v6Mode">
+              <option value="auto">IPv6 自动检测</option>
+              <option value="on">IPv6 强制启用</option>
+              <option value="off">IPv6 强制关闭</option>
+            </select>
+          </div>
+          <span id="v6Badge" style="font-size:12px;padding:3px 9px;border-radius:20px;border:1px solid var(--line);color:var(--dim);white-space:nowrap">检测中…</span>
+          <span id="v6Detail" style="font-size:12px;color:var(--dim2);max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+          <button class="btn sm" id="btnV6">重测</button>
           <div style="flex:1"></div>
           <button class="btn sm" id="btnValidate">校验配置</button>
           <button class="btn pri sm" id="btnApply">部署到服务器</button>
@@ -283,7 +349,7 @@ pre.log .g{color:var(--ok)}
       <div class="bar">
         <h2>服务日志</h2>
         <select id="logSvc" style="width:auto;min-width:150px">
-          <option value="v2bx">V2bX</option>
+          <option value="v2bx">v3bx</option>
           <option value="singbox">sing-box</option>
         </select>
         <select id="logLines" style="width:auto;min-width:110px">
@@ -367,7 +433,7 @@ pre.log .g{color:var(--ok)}
     </div>
     <div class="modal-body">
       <div class="tabs" id="pvTabs">
-        <button data-svc="v2bx" class="on">V2bX config.json</button>
+        <button data-svc="v2bx" class="on">v3bx 配置</button>
         <button data-svc="singbox">sing-box config.json</button>
       </div>
       <pre class="log" id="pvBox" style="max-height:520px"></pre>
@@ -458,6 +524,12 @@ async function boot() {
   $('#app').hidden = false;
   await refresh();
   renderEnv();
+
+  // 还没对接过面板的话，直接落到「对接」页
+  const c = await loadConnect();
+  if (c && (!c.apiHost || !c.hasKey || !(c.nodes || []).length)) {
+    switchView('connect');
+  }
 }
 
 /* ================= 数据 ================= */
@@ -466,9 +538,50 @@ async function refresh() {
   S.nodes = st.nodes || [];
   S.global = Object.assign({apiHost:'', apiKey:'', logLevel:'error', core:'sing'}, st.global || {});
   renderServices(st.services);
+  renderPorts(st.ports);
+  renderIpv6(st.ipv6);
   renderGlobal();
   renderNodes();
   validate();
+}
+
+/* IPv6：没有 v6 出口的机器，内核每建一条连接都要先吃一次 unreachable
+   再回落 v4，表现就是卡。这里把探测结果摆明，并允许手动覆盖。 */
+function renderIpv6(v) {
+  if (!v) return;
+  S.ipv6 = v;
+  const det = v.detected || {};
+  const on = !!v.enabled;
+  const b = $('#v6Badge'), d = $('#v6Detail'), sel = $('#v6Mode');
+  if (b) {
+    b.textContent = on ? 'IPv6 可用' : 'IPv6 不可用';
+    b.style.color = on ? 'var(--ok)' : 'var(--warn)';
+    b.style.borderColor = on ? 'rgba(63,185,80,.4)' : 'rgba(210,153,34,.4)';
+  }
+  if (sel && document.activeElement !== sel) sel.value = v.mode || 'auto';
+  if (d) {
+    const parts = [v.why || ''];
+    if (det.addrs && det.addrs.length) parts.push(det.addrs.slice(0, 2).join(' / '));
+    else parts.push('无全局地址');
+    if (!det.ok && det.detail) parts.push(det.detail);
+    d.textContent = parts.filter(Boolean).join(' · ');
+    d.title = d.textContent;
+  }
+}
+
+/* 实际在监听的端口。面板说「保存成功」是一回事，内核真的把端口打开了
+   是另一回事——把 ss 的结果直接摆出来，省得去 SSH 里查。 */
+function renderPorts(list) {
+  const box = $('#portBar');
+  if (!box) return;
+  if (!list || !list.length) {
+    box.innerHTML = '<span style="color:var(--err)">● 没有检测到监听端口</span>';
+    return;
+  }
+  box.innerHTML = '<span style="color:var(--ok)">● 正在监听</span> ' +
+    list.map(p => '<span style="color:var(--dim2)">' + esc(p.proto) + '</span> ' +
+      '<b style="color:var(--txt)">' + p.port + '</b>' +
+      '<span style="color:var(--dim2)"> ' + esc(p.proc) + '</span>').join('<span style="color:var(--line)"> │ </span>');
 }
 
 function renderServices(sv) {
@@ -477,7 +590,7 @@ function renderServices(sv) {
     const cls = on ? 'on' : 'bad';
     return '<span><i class="' + cls + '"></i>' + esc(label) + '</span>';
   };
-  $('#svcBar').innerHTML = mk('V2bX', sv.v2bx) + mk('sing-box', sv.singbox);
+  $('#svcBar').innerHTML = mk('v3bx', sv.v2bx) + mk('sing-box', sv.singbox);
 }
 
 function renderGlobal() {
@@ -529,7 +642,7 @@ function renderNodes() {
         '<div class="node-title">' + esc(PROTO_LABEL(n.nodeType)) +
           '<small>' + esc(portTxt) + '</small></div>' +
         '<span class="pill">' + esc(n.nodeType) + '</span>' +
-        '<span class="pill own' + (isSb ? ' sb' : '') + '">' + (isSb ? 'sing-box' : 'V2bX') + '</span>' +
+        '<span class="pill own' + (isSb ? ' sb' : '') + '">' + (isSb ? 'sing-box' : 'v3bx') + '</span>' +
         '<span class="pill">' + esc(n.core || '—') + '</span>' +
         '<span class="pill tls domain">' + esc(tlsTxt) + '</span>' +
         '<div class="node-act">' +
@@ -640,22 +753,46 @@ function renderForm() {
   const needTls = meta.tls !== 'none';
   const H = ['<div id="formHint"></div>'];
 
+  // ---- 对接 ----
+  // 新机器第一次进来时全局是空的，而「添加节点」表单里原来根本没有这两个
+  // 字段，用户填完协议和 ID 点保存，直接被 4 条校验挡住，还找不到地方改。
+  // 所以把地址和密钥直接放进添加流程，一次填完。
+  if (!isSb) {
+    const g = S.global || {};
+    H.push('<fieldset><legend>对接</legend>');
+    H.push('<div class="grid2">');
+    H.push('<div class="f"><label>面板地址 ApiHost <span class="req">*</span></label>' +
+      '<input data-gf="apiHost" value="' + esc(g.apiHost || '') + '" placeholder="https://xbb.example.com">' +
+      '<div class="hint">Xboard 地址，不要带结尾斜杠。整台机器共用这一个，填一次后面自动带出</div></div>');
+    H.push('<div class="f"><label>对接密钥 ApiKey <span class="req">*</span></label>' +
+      '<input data-gf="apiKey" type="password" value="' + (g.apiKey ? '••••••••' : '') + '" placeholder="Xboard 通讯密钥">' +
+      '<div class="hint">Xboard 后台 → 系统设置 → 服务端通讯密钥</div></div>');
+    H.push('</div></fieldset>');
+  }
+
   // ---- 基础 ----
   H.push('<fieldset><legend>基础</legend>');
   H.push('<div class="grid2">');
   H.push('<div class="f"><label>承载进程 <span class="req">*</span></label>' +
     '<select data-f="owner">' +
-      '<option value="v2bx"' + (n.owner==='v2bx'?' selected':'') + '>V2bX（面板下发参数）</option>' +
+      '<option value="v2bx"' + (n.owner==='v2bx'?' selected':'') + '>v3bx（面板下发参数）</option>' +
       '<option value="singbox"' + (isSb?' selected':'') + '>sing-box（本地完整配置）</option>' +
     '</select>' +
-    '<div class="hint">V2bX 只管「跑哪个 NodeID」，端口密码由面板下发；sing-box 需要在这里填完整参数</div></div>');
+    '<div class="hint">v3bx 只管「跑哪个 NodeID」，端口密码由面板下发；sing-box 需要在这里填完整参数</div></div>');
 
   H.push('<div class="f"><label>协议 <span class="req">*</span></label>' +
     '<select data-f="nodeType">' +
-      Object.keys(S.meta.protocols).map(k =>
-        '<option value="' + k + '"' + (n.nodeType===k?' selected':'') + '>' +
-        esc(S.meta.protocols[k].label) + ' (' + k + ')</option>').join('') +
-    '</select></div>');
+      Object.keys(S.meta.protocols).map(k => {
+        const p = S.meta.protocols[k];
+        // V2bX 的 NodeType 有白名单（api/panel/panel.go:59），socks/http
+        // 写进去会让服务无限重启，这里直接禁掉，别让用户选了再报错
+        const bad = n.owner === 'v2bx' && p.v2bx === false;
+        return '<option value="' + k + '"' + (n.nodeType===k?' selected':'') + (bad?' disabled':'') + '>' +
+          esc(p.label) + ' (' + k + ')' + (bad ? ' — 仅 sing-box' : '') + '</option>';
+      }).join('') +
+    '</select>' +
+    (n.owner === 'v2bx' ? '<div class="hint">V2bX 只认 vless / vmess / trojan / shadowsocks / hysteria / hysteria2 / tuic / anytls</div>' : '') +
+    '</div>');
   H.push('</div>');
 
   H.push('<div class="grid2">');
@@ -668,8 +805,12 @@ function renderForm() {
 
   if (!isSb) {
     H.push('<div class="f"><label>面板 NodeID <span class="req">*</span></label>' +
-      '<input data-f="nodeId" type="number" min="1" value="' + esc(n.nodeId) + '">' +
-      '<div class="hint">Xboard 面板里该节点的 ID</div></div>');
+      '<div style="display:flex;gap:8px;align-items:flex-start">' +
+        '<input data-f="nodeId" type="number" min="1" value="' + esc(n.nodeId) + '" style="flex:1">' +
+        '<button class="btn sm" id="btnProbe" type="button" style="white-space:nowrap">验证</button>' +
+      '</div>' +
+      '<div class="hint" id="probeHint">Xboard 面板 → 节点管理 → 该节点的 ID。' +
+        '填完点「验证」：通不通当场知道，还能自动带出 SNI 域名和面板下发的端口</div></div>');
   } else {
     H.push('<div class="f"><label>监听地址</label>' +
       '<input data-f="listenIP" value="' + esc(n.listenIP) + '" placeholder="0.0.0.0">' +
@@ -696,9 +837,10 @@ function renderForm() {
     if (['vless','vmess','trojan'].includes(n.nodeType)) {
       extra += '<div class="grid2">' +
         '<div class="f"><label>传输方式</label><select data-f="transport">' +
-          ['ws','grpc','tcp','http'].map(t => '<option value="' + t + '"' + (n.transport===t?' selected':'') + '>' + t + '</option>').join('') +
+          ['tcp','ws','grpc','httpupgrade'].map(t => '<option value="' + t + '"' + (n.transport===t?' selected':'') + '>' + t + '</option>').join('') +
         '</select></div>' +
-        '<div class="f"><label>WS Path</label><input data-f="path" value="' + esc(n.path) + '"></div>' +
+        '<div class="f"><label>' + (n.transport === 'grpc' ? 'Service Name' : 'WS Path') + '</label>' +
+          '<input data-f="path" value="' + esc(n.path) + '"></div>' +
       '</div>';
     }
     if (n.nodeType === 'shadowsocks') {
@@ -749,6 +891,9 @@ function renderForm() {
     H.push('<fieldset><legend>证书 / TLS</legend>');
     if (meta.tls === 'required') {
       H.push('<div class="tip">该协议<b>必须</b>启用 TLS，不能选「不启用」。</div>');
+    } else if (meta.tls === 'optional') {
+      H.push('<div class="tip">该协议 TLS 可选。<b>不启用</b>能直接跑，先用它把链路跑通最省事；' +
+        '要防探测再选「自签」（客户端得开 <code>allowInsecure</code>）或 DNS-01 签真证书。</div>');
     }
     H.push('<div class="grid2">');
     H.push('<div class="f"><label>证书方式 <span class="req">*</span></label><select data-f="certMode">' +
@@ -757,42 +902,68 @@ function renderForm() {
         return '<option value="' + m + '"' + (c.mode===m?' selected':'') + '>' + esc(S.meta.certModes[m]) + '</option>';
       }).join('') + '</select></div>');
     H.push('<div class="f"><label>域名 / SNI' + (c.mode!=='none'?' <span class="req">*</span>':'') + '</label>' +
-      '<input data-f="certDomain" value="' + esc(c.domain) + '" placeholder="node.example.com"></div>');
+      '<input data-f="certDomain" value="' + esc(c.domain) + '" placeholder="node.example.com">' +
+      '<div class="hint">必须和 Xboard 里该节点的 SNI 一致。填完 NodeID 点上面的「验证」能自动带出来。</div></div>');
     H.push('</div>');
 
     if (c.mode === 'file' || c.mode === 'self') {
       H.push('<div class="grid2">' +
-        '<div class="f"><label>证书路径</label><input data-f="certFile" value="' + esc(c.certFile) + '"></div>' +
-        '<div class="f"><label>私钥路径</label><input data-f="keyFile" value="' + esc(c.keyFile) + '"></div>' +
+        '<div class="f"><label>证书路径</label><input data-f="certFile" value="' + esc(c.certFile) + '"' +
+          (c.mode === 'self' ? ' readonly' : '') + '></div>' +
+        '<div class="f"><label>私钥路径</label><input data-f="keyFile" value="' + esc(c.keyFile) + '"' +
+          (c.mode === 'self' ? ' readonly' : '') + '></div>' +
       '</div>');
-    }
-    if (c.mode === 'dns' || c.mode === 'http') {
-      H.push('<div class="grid2">' +
-        '<div class="f"><label>邮箱（acme 注册用）</label><input data-f="certEmail" value="' + esc(c.email) + '"></div>');
-      if (c.mode === 'dns') {
-        H.push('<div class="f"><label>DNS 服务商</label><select data-f="certProvider">' +
-          S.meta.providers.map(p => '<option value="' + p + '"' + (c.provider===p?' selected':'') + '>' + p + '</option>').join('') +
-        '</select></div>');
+      if (c.mode === 'self') {
+        H.push('<div class="tip">自签证书由面板生成（EC P-256，含 SAN，10 年）。' +
+          '客户端需要 <code>insecure</code> / <code>allowInsecure</code> 才能连，' +
+          '或者改用 DNS-01 签真证书。</div>');
       }
-      H.push('</div>');
-      if (c.mode === 'dns') {
-        const need = (S.meta.providerEnv[c.provider] || []);
-        const hasPool = !!(((S.meta.creds || {})[c.provider]) || {});
-        H.push('<div class="tip">' +
-          (hasPool
-            ? '已从凭据池继承 <b>' + esc(c.provider) + '</b> 的凭据（显示为掩码），无需重复填写。'
-            : '申请证书需要 <b>' + esc(c.provider) + '</b> 的 API 凭据，填一次后会自动记入凭据池，后续新节点直接复用。') +
-          '这些值会写进 config.json 的 <code>DNSEnv</code>。</div>');
+      H.push('<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">' +
+        '<button class="btn sm" id="btnIssue">' + (c.mode === 'self' ? '生成自签证书' : '检查证书文件') + '</button>' +
+        '<span id="certStat" style="font-size:12px;color:var(--dim)">读取中…</span></div>');
+    }
+    if (c.mode === 'http') {
+      H.push('<div class="f"><label>邮箱（acme 注册用）</label><input data-f="certEmail" value="' + esc(c.email) + '" placeholder="you@example.com">' +
+        '<div class="hint">用于 acme.sh 注册 Let\'s Encrypt 账号，不填也行</div></div>');
+    }
+    if (c.mode === 'dns') {
+      H.push('<div class="f"><label>DNS 服务商</label><select data-f="certProvider">' +
+        S.meta.providers.map(p => {
+          const pf = (S.meta.providerFields || {})[p] || {};
+          const lbl = pf.label || p;
+          return '<option value="' + p + '"' + (c.provider===p?' selected':'') + '>' + esc(lbl) + '</option>';
+        }).join('') +
+      '</select></div>');
+      const pf = (S.meta.providerFields || {})[c.provider] || {groups: [], fields: {}};
+      const hasPool = !!(((S.meta.creds || {})[c.provider]) || {});
+      H.push('<div class="tip">' +
+        (hasPool
+          ? '已从凭据池继承 <b>' + esc(pf.label || c.provider) + '</b> 的凭据（显示为掩码），无需重复填写。'
+          : '申请证书需要 <b>' + esc(pf.label || c.provider) + '</b> 的 API 凭据，填一次后会自动记入凭据池，后续新节点直接复用。') +
+        '这些值会写进 config.json 的 <code>DNSEnv</code>，V2bX 启动时也会用它续期。</div>');
+      (pf.groups || []).forEach((gr, gi) => {
+        H.push('<div style="margin-bottom:12px">');
+        if (gr.title) H.push('<div style="font-size:12px;color:var(--txt);margin-bottom:6px;font-weight:600">' +
+          (pf.groups.length > 1 ? '方式 ' + ['一','二','三','四'][gi] + '：' : '') + gr.title + '</div>');
         H.push('<div class="grid2">');
-        need.forEach(k => {
+        (gr.keys || []).forEach(k => {
+          const fd = (pf.fields || {})[k] || {label: k, ph: ''};
           const v = (c.dnsEnv && c.dnsEnv[k]) || '';
-          H.push('<div class="f"><label>' + esc(k) + '</label><input data-env="' + esc(k) + '" type="password" value="' +
-            (v ? '••••••••' : '') + '" placeholder="' + esc(k) + '"></div>');
+          H.push('<div class="f"><label>' + esc(fd.label) + '</label>' +
+            '<input data-env="' + esc(k) + '"' + (fd.plain ? '' : ' type="password"') +
+            ' value="' + (v ? '••••••••' : '') + '" placeholder="' + esc(fd.ph || '') + '"></div>');
         });
         H.push('</div>');
-        H.push('<button class="btn sm" id="btnIssue" style="margin-bottom:12px">立即申请证书</button>' +
-               '<span id="issueMsg" style="font-size:12px;color:var(--dim);margin-left:10px"></span>');
-      }
+        if (gr.hint) H.push('<div class="hint" style="margin-top:-4px">' + gr.hint + '</div>');
+        H.push('</div>');
+      });
+    }
+    if (c.mode === 'dns' || c.mode === 'http') {
+      H.push('<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">' +
+        '<button class="btn sm" id="btnIssue">立即申请证书</button>' +
+        '<span id="certStat" style="font-size:12px;color:var(--dim)">读取中…</span></div>');
+      H.push('<div class="tip">不点这个也行：证书文件不存在时，V2bX 启动会用内置 lego ' +
+        '按上面的 Provider + DNSEnv 自动申请，点「部署」一样能签下来。</div>');
     }
     H.push('</fieldset>');
   } else {
@@ -803,7 +974,30 @@ function renderForm() {
 
   $('#nodeForm').innerHTML = H.join('');
   bindForm();
+  refreshCertStat();
   validateForm();
+}
+
+/* 证书状态：文件在不在、还剩几天、CN 对不对 */
+function refreshCertStat() {
+  const box = $('#certStat');
+  if (!box) return;
+  const c = (S.editing && S.editing.cert) || {};
+  if (!c.certFile) { box.textContent = '还没有证书路径'; return; }
+  api('/api/cert/status?path=' + encodeURIComponent(c.certFile) +
+      '&domain=' + encodeURIComponent(c.domain || ''))
+    .then(d => {
+      const LBL = {ok:'有效', expiring:'快过期', expired:'已过期', missing:'文件不存在',
+                   mismatch:'域名不匹配', invalid:'无法解析'};
+      const col = d.state === 'ok' ? 'var(--ok)'
+                : d.state === 'expiring' ? 'var(--warn)' : 'var(--err)';
+      let s = '<span style="color:' + col + '">● ' + esc(LBL[d.state] || d.state) + '</span>';
+      if (d.notAfter) s += ' <span style="color:var(--dim2)">到期 ' + esc(d.notAfter) +
+        (d.days != null ? '（' + d.days + ' 天）' : '') + '</span>';
+      if (d.cn) s += ' <span style="color:var(--dim2)">CN=' + esc(d.cn) + '</span>';
+      box.innerHTML = s;
+    })
+    .catch(() => { box.textContent = '状态读取失败'; });
 }
 
 /* 表单内实时校验：只显示当前节点自己的问题 */
@@ -843,13 +1037,81 @@ function bindForm() {
   $$('#nodeForm [data-env]').forEach(el => {
     el.addEventListener('input', onField);
   });
+  $$('#nodeForm [data-gf]').forEach(el => {
+    el.addEventListener('input', onGlobalField);
+    el.addEventListener('change', onGlobalField);
+  });
   const bi = $('#btnIssue');
   if (bi) bi.addEventListener('click', doIssue);
+  const bp = $('#btnProbe');
+  if (bp) bp.addEventListener('click', probeNodeForm);
+}
+
+/* 表单里的「面板地址 / 对接密钥」是全局的，直接写回 S.global，
+   这样关掉弹窗也不会丢，部署时跟着 global 一起提交。 */
+function onGlobalField(e) {
+  const k = e.target.dataset.gf;
+  const v = e.target.value.trim();
+  if (k === 'apiKey' && v === '••••••••') return;   // 没改就别覆盖
+  S.global[k] = v;
+  setTimeout(validateForm, 0);
+}
+
+/* 点「验证」：真的去问一次 Xboard 这个 NodeID 存不存在、是什么协议、
+   端口多少、SNI 是什么。通了就把域名自动填上，省得用户去面板里翻。 */
+async function probeNodeForm() {
+  const n = S.editing;
+  const g = S.global || {};
+  const hint = $('#probeHint');
+  if (!hint) return;
+  if (!g.apiHost) { hint.innerHTML = '<span style="color:var(--err)">先填上面的「面板地址」</span>'; return; }
+  if (!n.nodeId) { hint.innerHTML = '<span style="color:var(--err)">先填 NodeID</span>'; return; }
+  hint.innerHTML = '<span style="color:var(--dim)">验证中…</span>';
+  try {
+    const r = await api('/api/connect/test', {
+      method: 'POST',
+      body: {apiHost: g.apiHost, apiKey: g.apiKey || '', nodeId: n.nodeId, nodeType: n.nodeType},
+    });
+    if (!r.ok) {
+      hint.innerHTML = '<span style="color:var(--err)">✗ ' + esc(r.msg || '不通') + '</span>' +
+        '<div style="margin-top:4px;color:var(--dim2)">检查 NodeID 是否在 Xboard 里、密钥对不对、这台机器能不能访问面板地址</div>';
+      return;
+    }
+    const d = r.detail || {};
+    let s = '<span style="color:var(--ok)">✓ ' + esc(r.msg) + '</span>';
+    if (d.protocol && d.protocol !== n.nodeType) {
+      s += ' <span style="color:var(--warn)">面板里这个节点是 ' + esc(d.protocol) +
+           '，和上面选的 ' + esc(n.nodeType) + ' 不一致，客户端会连不上</span>';
+    }
+    hint.innerHTML = s;
+    if (d.serverName && !n.cert.domain) {
+      n.cert.domain = d.serverName;
+      const el = document.querySelector('[data-f="certDomain"]');
+      if (el) el.value = d.serverName;
+      if (n.cert.mode !== 'none') renderForm();
+      toast('已自动填入域名 ' + d.serverName, 'ok');
+    }
+  } catch (e) {
+    hint.innerHTML = '<span style="color:var(--err)">' + esc(e.message) + '</span>';
+  }
 }
 
 function onField(e) {
   const el = e.target;
   const n = S.editing;
+
+  /* data-env 的输入框（DNS 凭据）没有 data-f，必须在 data-f 的 early return
+     之前处理，否则用户填的 CF Token / API Key / 邮箱根本写不进 dnsEnv，
+     validate 永远报「缺凭据」，保存不了。 */
+  if (el.dataset.env) {
+    n.cert.dnsEnv = n.cert.dnsEnv || {};
+    const v = el.value;
+    if (v && v !== '••••••••') n.cert.dnsEnv[el.dataset.env] = v;
+    else if (!v) delete n.cert.dnsEnv[el.dataset.env]; /* 清空了就删掉，别留空字符串 */
+    setTimeout(validateForm, 0);
+    return;
+  }
+
   const k = el.dataset.f;
   if (!k) return;
   setTimeout(validateForm, 0);
@@ -869,12 +1131,14 @@ function onField(e) {
     n.nodeType = v;
     const m = S.meta.protocols[v];
     if (!m.cores.includes(n.core)) n.core = m.cores[0];
+    // 必 TLS 的协议默认给自签：不需要任何凭据，点保存就能起
     if (m.tls === 'none') n.cert.mode = 'none';
-    else if (n.cert.mode === 'none' && m.tls === 'required') n.cert.mode = 'dns';
+    else if (m.tls === 'required' && n.cert.mode === 'none') n.cert.mode = 'self';
     renderForm();
     return;
   }
   if (k === 'core') { n.core = v; return; }
+  if (k === 'transport') { n.transport = v; renderForm(); return; }
   if (k === 'certMode') {
     n.cert.mode = v;
     renderForm();
@@ -890,11 +1154,17 @@ function onField(e) {
   if (k.startsWith('cert')) {
     const map = {certDomain:'domain', certFile:'certFile', keyFile:'keyFile', certEmail:'email'};
     n.cert[map[k]] = v;
-    return;
-  }
-  if (el.dataset.env) {
-    n.cert.dnsEnv = n.cert.dnsEnv || {};
-    if (v !== '••••••••') n.cert.dnsEnv[el.dataset.env] = v;
+    if (k === 'certDomain' && n.cert.mode === 'self') {
+      // 自签路径跟着域名走，和后端 normalize_cert 保持一致。
+      // 这里只改两个只读框的值，不重绘，否则输入框会失焦。
+      const d = v.trim();
+      n.cert.certFile = d ? '/etc/V2bX/cert/' + d + '.crt' : '';
+      n.cert.keyFile  = d ? '/etc/V2bX/cert/' + d + '.key' : '';
+      const cf = document.querySelector('#nodeForm [data-f="certFile"]');
+      const kf = document.querySelector('#nodeForm [data-f="keyFile"]');
+      if (cf) cf.value = n.cert.certFile;
+      if (kf) kf.value = n.cert.keyFile;
+    }
     return;
   }
   n[k] = v;
@@ -928,31 +1198,56 @@ async function doIssue() {
   const n = S.editing;
   const c = n.cert;
   if (!c.domain) { toast('请先填域名', 'err'); return; }
+  // 「文件」方式面板只负责检查，不会去签发
+  if (c.mode === 'file') { refreshCertStat(); toast('已刷新证书状态', 'ok'); return; }
   const btn = $('#btnIssue');
+  const isSelf = c.mode === 'self';
+  const isFile = c.mode === 'file';
   btn.disabled = true;
-  $('#issueMsg').textContent = '申请中，最长 3 分钟…';
+  const label = $('#certStat');
+  if (label) label.textContent = isSelf ? '生成中…' : '申请中，最长 4 分钟…';
+
+  // 掩码绝不能当真凭据发给后端，否则 acme.sh 会拿 "••••••••" 去调 DNS API。
+  // 这里把掩码整个丢掉，后端会自动回落到凭据池里的真值。
+  const env = {};
+  Object.keys(c.dnsEnv || {}).forEach(k => {
+    const v = c.dnsEnv[k];
+    if (v && v !== '••••••••' && v !== '__KEEP__') env[k] = v;
+  });
+
   try {
     const r = await api('/api/cert/issue', {
       method: 'POST',
       body: {domain: c.domain, mode: c.mode, provider: c.provider,
-             dnsEnv: c.dnsEnv || {}, email: c.email, outDir: '/etc/V2bX'},
+             dnsEnv: env, email: c.email, outDir: ''},
     });
     if (r.ok) {
-      $('#issueMsg').innerHTML = '<span style="color:var(--ok)">签发成功</span> ' + esc(r.certFile);
-      c.certFile = r.certFile;
-      c.keyFile = r.keyFile;
-      c.mode = 'file';
+      if (r.certFile) c.certFile = r.certFile;
+      if (r.keyFile) c.keyFile = r.keyFile;
+      if (r.mode) c.mode = r.mode;
       renderForm();
-      toast('证书签发成功，已切到「文件」方式', 'ok');
+      toast(isSelf ? '自签证书已生成' : '证书签发成功', 'ok');
+    } else if (r.delegated) {
+      // 没装 acme.sh —— 不是错误，V2bX 启动时会自己签
+      showResult('证书会在部署时自动签发', [
+        {name: 'acme.sh', ok: false, detail: '未安装（不影响）'},
+        {name: 'V2bX 内置 lego', ok: true, detail: '部署时自动申请'},
+      ], '<div class="tip" style="margin-bottom:12px">这台机器没装 acme.sh，<b>不需要装</b>。' +
+        '直接点「保存」再点「部署到服务器」，V2bX 启动时会用内置 lego 按上面的 DNS 凭据自动签证书。' +
+        '去日志页看 v3bx 日志，出现 <code>obtain certificate</code> 就是签成功了。</div>' +
+        '<pre class="log" style="max-height:200px">' + esc(r.log || '') + '</pre>', []);
+      toast('直接点部署就行，证书会自动签', 'ok');
     } else {
-      $('#issueMsg').innerHTML = '<span style="color:var(--err)">失败</span>';
-      showResult('证书申请失败', [{name:'acme.sh', ok:false, detail:'失败'}],
+      showResult(isSelf ? '生成自签证书失败' : '证书申请失败',
+                 [{name: isSelf ? 'openssl' : 'acme.sh', ok: false, detail: '失败'}],
                  '<pre class="log">' + esc(r.log || '无输出') + '</pre>', []);
+      toast(isSelf ? '生成失败' : '申请失败', 'err');
     }
   } catch (e) {
-    $('#issueMsg').innerHTML = '<span style="color:var(--err)">' + esc(e.message) + '</span>';
+    toast(e.message, 'err');
   } finally {
     btn.disabled = false;
+    refreshCertStat();
   }
 }
 
@@ -1078,9 +1373,9 @@ async function doRollback(name) {
 function renderEnv() {
   if (!S.meta) return;
   $('#envInfo').innerHTML =
-    '<dt>V2bX 配置</dt><dd>' + esc(S.meta.paths.v2bx) + '</dd>' +
+    '<dt>v3bx 配置</dt><dd>' + esc(S.meta.paths.v2bx) + '</dd>' +
     '<dt>sing-box 配置</dt><dd>' + esc(S.meta.paths.singbox) + '</dd>' +
-    '<dt>V2bX 版本</dt><dd>' + esc(S.meta.caps.v2bx_version || '未检测') + '</dd>' +
+    '<dt>v3bx 版本</dt><dd>' + esc(S.meta.caps.v2bx_version || '未检测') + '</dd>' +
     '<dt>sing-box 版本</dt><dd>' + esc(S.meta.caps.singbox_version || '未检测') + '</dd>';
 }
 
@@ -1098,24 +1393,237 @@ async function loadPreview(svc) {
   } catch (e) { $('#pvBox').textContent = e.message; }
 }
 
+/* ================= 对接 ================= */
+let CONN = {nodes: []};
+
+function protoOptions(cur) {
+  const ps = (S.meta && S.meta.protocols) || {};
+  // 对接页的节点都由 V2bX 承载，只列它的白名单内的协议；
+  // socks / http 写进 config.json 会让 V2bX 直接起不来。
+  const keys = Object.keys(ps).filter(k => ps[k].v2bx !== false);
+  if (!keys.length) return '<option value="vless">VLESS</option>';
+  return keys.map(k => '<option value="' + k + '"' + (k === cur ? ' selected' : '') + '>' +
+    esc(ps[k].label || k) + '</option>').join('');
+}
+
+async function loadConnect() {
+  try {
+    const d = await api('/api/connect');
+    if (d.error) toast(d.error, 'err');
+    $('#cnHost').value = d.apiHost || '';
+    $('#cnKey').value = '';
+    $('#cnKey').placeholder = d.hasKey ? '已保存，留空表示不修改' : '节点通讯密钥';
+    $('#cnKeyHint').textContent = d.hasKey
+      ? '已保存过密钥，留空沿用旧值'
+      : '面板「系统设置 → 节点通讯密钥」';
+    $('#cnCore').value = d.core || 'sing';
+    CONN.nodes = (d.nodes || []).map(n => ({nodeId: n.nodeId, nodeType: n.nodeType}));
+    renderConnNodes();
+
+    // 安装包自带的示例节点（NodeID 33 / ApiKey test / 127.0.0.1）已被后端过滤，
+    // 这里告诉用户一声，免得以为是配置丢了
+    const tpl = d.templateIgnored || 0;
+    const tplBox = $('#cnTpl');
+    if (tpl > 0) {
+      tplBox.style.display = '';
+      tplBox.textContent = '已忽略 ' + tpl + ' 个安装包自带的示例节点（NodeID 33 / ApiKey test / 127.0.0.1）。'
+        + '它不是真实节点，点一次「保存并重启」就会从 config.json 里清掉。';
+    } else {
+      tplBox.style.display = 'none';
+    }
+
+    const s = d.service || {};
+    const LABEL = {active:'运行中', inactive:'未运行', failed:'启动失败',
+                   activating:'启动中', deactivating:'停止中', unknown:'未检测'};
+    const on = s.active === 'active';
+    $('#cnSvc').innerHTML =
+      '<span style="color:' + (on ? 'var(--ok)' : 'var(--err)') + '">● ' +
+      esc(LABEL[s.active] || s.active || '未知') + '</span>' +
+      (s.since ? ' <span style="color:var(--dim2);font-size:11px">自 ' + esc(s.since) + '</span>' : '');
+    return d;
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+function renderConnNodes() {
+  const box = $('#cnList');
+  $('#cnCnt').textContent = CONN.nodes.length;
+  if (!CONN.nodes.length) {
+    box.innerHTML = '<div class="empty"><div class="big">还没声明节点</div>' +
+      '<div>点右上角「+ 添加节点」，填面板里那个节点的 ID</div></div>';
+    return;
+  }
+  box.innerHTML = CONN.nodes.map((n, i) =>
+    '<div class="node" style="margin-bottom:10px">' +
+      '<div class="node-head">' +
+        '<span class="node-title" data-cntitle="' + i + '">节点 ' + esc(n.nodeId || '—') + '</span>' +
+        '<span class="pill own">v3bx</span>' +
+        '<div class="node-act"><button class="icon-btn del" data-cndel="' + i + '" title="移除"></button></div>' +
+      '</div>' +
+      '<div class="grid2" style="margin-top:12px">' +
+        '<div class="f" style="margin:0"><label>节点 ID</label>' +
+          '<input type="number" min="1" data-cnid="' + i + '" value="' + esc(n.nodeId || '') + '" placeholder="例如 51"></div>' +
+        '<div class="f" style="margin:0"><label>协议类型</label>' +
+          '<select data-cntype="' + i + '">' + protoOptions(n.nodeType) + '</select></div>' +
+      '</div>' +
+    '</div>'
+  ).join('');
+}
+
+async function testConn() {
+  const host = $('#cnHost').value.trim();
+  const key = $('#cnKey').value.trim();
+  const first = CONN.nodes[0];
+  if (!host) { toast('先填面板地址', 'err'); return; }
+  if (!first || !Number(first.nodeId)) { toast('先加一个节点 ID 再测', 'err'); return; }
+  const btn = $('#btnConnTest');
+  btn.disabled = true; btn.textContent = '测试中…';
+  $('#cnResult').innerHTML = '';
+  try {
+    const r = await api('/api/connect/test', {method:'POST', body:{
+      apiHost: host, apiKey: key,
+      nodeId: Number(first.nodeId), nodeType: first.nodeType}});
+    $('#cnResult').innerHTML = '<div class="check ' + (r.ok ? 'ok' : 'error') + '">' +
+      '<span class="ico">' + (r.ok ? '✓' : '✕') + '</span><div>' + esc(r.msg) + '</div></div>';
+    toast(r.ok ? '连接正常' : '连接失败', r.ok ? 'ok' : 'err');
+  } catch (e) {
+    toast(e.message, 'err');
+  } finally {
+    btn.disabled = false; btn.textContent = '测试连接';
+  }
+}
+
+async function saveConn() {
+  const host = $('#cnHost').value.trim();
+  const key = $('#cnKey').value.trim();
+  const core = $('#cnCore').value;
+  if (!host) { toast('先填面板地址', 'err'); return; }
+
+  const items = CONN.nodes.filter(n => Number(n.nodeId) > 0)
+    .map(n => ({nodeId: Number(n.nodeId), nodeType: n.nodeType}));
+  if (!items.length) { toast('至少填一个节点 ID', 'err'); return; }
+
+  const ids = items.map(x => x.nodeId);
+  const dup = ids.filter((v, i) => ids.indexOf(v) !== i);
+  if (dup.length) { toast('节点 ID 重复：' + Array.from(new Set(dup)).join(', '), 'err'); return; }
+
+  const btn = $('#btnConnSave');
+  btn.disabled = true; btn.textContent = '保存中…';
+  $('#cnResult').innerHTML = '<div class="check"><span class="ico">…</span>' +
+    '<div>正在写入配置并重启，稍候…</div></div>';
+  try {
+    const r = await api('/api/connect/save', {method:'POST', body:{
+      apiHost: host, apiKey: key, core: core, nodes: items}});
+    const steps = r.steps || [];
+    const logHtml = r.logs ? '<pre class="log" style="max-height:300px">' + colorLog(r.logs) + '</pre>' : '';
+    if (r.ok) {
+      let extra = logHtml;
+      if (r.domains && Object.keys(r.domains).length) {
+        extra = '<div class="check ok" style="margin:0 0 12px"><span class="ico">✓</span><div>' +
+          '已从面板取到 SNI，自动补进节点域名：' + esc(Object.values(r.domains).join('、')) +
+          '</div></div>' + extra;
+      }
+      const bad = (r.probes || []).filter(p => !p.ok);
+      if (bad.length) {
+        extra += '<div class="check" style="margin-top:12px"><span class="ico">!</span><div>' +
+          bad.map(p => '节点 ' + esc(p.nodeId) + ' 探测未通过：' + esc(p.msg)).join('<br>') +
+          '<br>不影响本次保存，但该节点可能拿不到配置。' +
+          (bad.some(p => !(r.domains || {})[p.nodeId])
+            ? '探测失败时取不到 SNI，请到「节点」页手填域名。' : '') +
+          '</div></div>';
+      }
+      showResult('对接已生效', steps, extra, r.errors || []);
+      toast('已保存，v3bx 已重启', 'ok');
+      await refresh();
+      await loadConnect();
+    } else {
+      showResult(r.rolled_back ? '保存失败 — 已自动回滚' : '保存失败 — 配置未改动',
+                 steps, logHtml, r.errors || []);
+      const certErr = (r.errors || []).some(e => String(e.field || '').indexOf('cert') === 0);
+      if (certErr) {
+        toast('有节点还没配证书，1 秒后跳到「节点」页', 'err');
+        setTimeout(() => switchView('nodes'), 1200);
+      } else {
+        toast(r.rolled_back ? '启动失败，已回滚' : '保存失败', 'err');
+      }
+    }
+  } catch (e) {
+    toast(e.message, 'err');
+  } finally {
+    btn.disabled = false; btn.textContent = '保存并重启';
+    $('#cnResult').innerHTML = '';
+  }
+}
+
+function switchView(name) {
+  $$('nav button').forEach(x => x.classList.toggle('on', x.dataset.view === name));
+  $$('.view').forEach(v => v.classList.toggle('on', v.id === 'v-' + name));
+  if (name === 'logs') loadLog();
+  if (name === 'backup') loadBackups();
+  if (name === 'connect') loadConnect();
+}
+
 /* ================= 事件绑定 ================= */
 function bind() {
   $('#lgBtn').addEventListener('click', login);
   $('#lgPass').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
   $('#btnLogout').addEventListener('click', () => logout(true));
 
-  $$('nav button').forEach(b => b.addEventListener('click', () => {
-    $$('nav button').forEach(x => x.classList.remove('on'));
-    b.classList.add('on');
-    $$('.view').forEach(v => v.classList.remove('on'));
-    $('#v-' + b.dataset.view).classList.add('on');
-    if (b.dataset.view === 'logs') loadLog();
-    if (b.dataset.view === 'backup') loadBackups();
-  }));
+  $$('nav button').forEach(b => b.addEventListener('click', () => switchView(b.dataset.view)));
+
+  // 对接页
+  $('#btnConnTest').addEventListener('click', testConn);
+  $('#btnConnSave').addEventListener('click', saveConn);
+  $('#btnConnAdd').addEventListener('click', () => {
+    const last = CONN.nodes[CONN.nodes.length - 1];
+    CONN.nodes.push({nodeId: '', nodeType: (last && last.nodeType) || 'vless'});
+    renderConnNodes();
+  });
+  $('#cnList').addEventListener('input', e => {
+    const el = e.target.closest('[data-cnid]');
+    if (!el) return;
+    const i = Number(el.dataset.cnid);
+    CONN.nodes[i].nodeId = el.value.replace(/\D/g, '');
+    const t = document.querySelector('[data-cntitle="' + i + '"]');
+    if (t) t.textContent = '节点 ' + (CONN.nodes[i].nodeId || '—');
+  });
+  $('#cnList').addEventListener('change', e => {
+    const el = e.target.closest('[data-cntype]');
+    if (el) CONN.nodes[Number(el.dataset.cntype)].nodeType = el.value;
+  });
+  $('#cnList').addEventListener('click', e => {
+    const del = e.target.closest('[data-cndel]');
+    if (!del) return;
+    CONN.nodes.splice(Number(del.dataset.cndel), 1);
+    renderConnNodes();
+  });
 
   $('#btnAdd').addEventListener('click', () => openNode(null));
   $('#btnApply').addEventListener('click', doApply);
   $('#btnValidate').addEventListener('click', doValidate);
+
+  $('#btnV6').addEventListener('click', async () => {
+    const btn = $('#btnV6');
+    btn.disabled = true;
+    $('#v6Badge').textContent = '探测中…';
+    $('#v6Badge').style.color = 'var(--dim)';
+    try {
+      renderIpv6(await api('/api/ipv6?force=1'));
+    } catch (e) {
+      toast('探测失败: ' + e.message, 'err');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  $('#v6Mode').addEventListener('change', async (e) => {
+    try {
+      const r = await api('/api/ipv6', {method:'POST', body:{mode: e.target.value}});
+      renderIpv6(r.ipv6);
+      toast('IPv6 策略已切换，部署后生效', 'ok');
+    } catch (err) {
+      toast('切换失败: ' + err.message, 'err');
+    }
+  });
   $('#btnPreview').addEventListener('click', openPreview);
   $('#btnSaveNode').addEventListener('click', saveNode);
   $('#btnReloadLog').addEventListener('click', loadLog);
